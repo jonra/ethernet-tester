@@ -5,6 +5,7 @@ Wants=tailscaled.service
 
 [Service]
 WorkingDirectory=/opt/ethtester
+ExecStartPre=-/usr/sbin/nft -f /etc/ethtester/mcp-firewall.nft
 ExecStart=/opt/ethtester/venv/bin/python -m ethtester.mcp --config /boot/firmware/ethtester.toml
 Restart=always
 RestartSec=10

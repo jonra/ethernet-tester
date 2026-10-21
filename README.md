@@ -46,6 +46,14 @@ The tester runs an MCP server, so Claude Code can read its status and run probes
 
 **Home Wi-Fi only (no Tailscale).** Set `mcp_bind = "wlan0"` and `mcp_clients = "lan"` in `/boot/firmware/ethtester.toml`, re-run the installer, and use the `claude mcp add …` command it prints. The token is still required unless you turn it off (see below). This only works while your Mac is on the same home network. Give the Pi's Wi-Fi address a DHCP reservation on your router so the URL doesn't change.
 
+**Changing settings from the installer.** `install.sh` accepts repeatable `--set key=value` options (keys: `interface`, `display`, `expected_speed`, `mcp_port`, `mcp_bind`, `mcp_clients`, `mcp_auth`) that edit `/boot/firmware/ethtester.toml` before the install runs, so you don't need a separate sudo edit:
+
+```
+sudo deploy/install.sh --set mcp_bind=wlan0 --set mcp_clients=lan --set mcp_auth=none
+```
+
+The installer also adds an nftables rule (`/etc/ethtester/mcp-firewall.nft`, loaded again before each MCP start) that drops connections to the MCP port on the interface under test.
+
 **No token (`mcp_auth = "none"`).** On a trusted home Wi-Fi you can set `mcp_auth = "none"` to drop the token. The server then logs a warning and skips the bearer check; the client-address check (`mcp_clients`) still applies. The risk: anyone on the Wi-Fi network can run probes (ping, traceroute, ARP scans, DHCP renew, link changes) through the tester's Ethernet port. Don't use it on a network you don't fully trust. On the CLI, `ethtester configure --url URL` accepts an empty token, and then no Authorization header is sent.
 
 Tools: `get_status`, `get_history`, `get_link_details`, `ping`, `traceroute`, `dns_lookup`, `http_check`, `dhcp_renew`, `link_control`, `neighbour_scan`, `speed_test`.
