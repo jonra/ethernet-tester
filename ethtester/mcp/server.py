@@ -2,6 +2,7 @@
 
 import argparse
 import functools
+import ipaddress
 import logging
 from pathlib import Path
 
@@ -10,7 +11,7 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from ..checks.command import run_command
+from ..checks.command import CheckError, run_command
 from ..config import DEFAULT_CONFIG_PATH, Config, load_config
 from . import validate
 from .auth import BearerAuth, read_token
@@ -94,11 +95,20 @@ def build_app(service, token: str):
 
 def resolve_bind(cfg: Config, run=run_command) -> str:
     if cfg.mcp_bind != "tailscale":
-        return validate.ipv4(cfg.mcp_bind)
-    addresses = run(["tailscale", "ip", "-4"], check=False).split()
+        addr = validate.ipv4(cfg.mcp_bind)
+        if ipaddress.IPv4Address(addr).is_unspecified:
+            raise ValueError("mcp_bind must not be 0.0.0.0; use a specific address or 'tailscale'")
+        return addr
+    try:
+        addresses = run(["tailscale", "ip", "-4"], check=False).split()
+    except CheckError as exc:
+        raise SystemExit(f"Tailscale isn't available ({exc}); install and start Tailscale on the Pi") from None
     if not addresses:
         raise SystemExit("Tailscale has no IPv4 address yet; run 'sudo tailscale up' on the Pi")
-    return validate.ipv4(addresses[0])
+    addr = validate.ipv4(addresses[0])
+    if ipaddress.IPv4Address(addr).is_unspecified:
+        raise SystemExit("Tailscale reported 0.0.0.0; refusing to listen on all interfaces")
+    return addr
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -110,13 +120,13 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg = load_config(args.config)
     token = read_token(args.token_file)
-    bind = resolve_bind(cfg)
     linkctl = LinkControl(cfg.interface)
-    linkctl.recover()
+    linkctl.recover()  # restore a forced link first, even if Tailscale isn't up yet
+    bind = resolve_bind(cfg)
     probelog = ProbeLog(Path(cfg.log_path).with_name("probes.log"))
     app = build_app(ProbeService(cfg, linkctl, probelog=probelog), token)
     log.info("MCP server listening on http://%s:%d/mcp", bind, cfg.mcp_port)
     try:
         uvicorn.run(app, host=bind, port=cfg.mcp_port, log_level="info")
     finally:
-        linkctl.restore_autoneg()
+        linkctl._restore_quietly()

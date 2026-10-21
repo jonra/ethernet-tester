@@ -15,7 +15,7 @@ def read_token(path: Path) -> str:
 
 
 class BearerAuth:
-    """Rejects any HTTP request whose Authorization header isn't exactly 'Bearer <token>'."""
+    """Passes lifespan through, drops other non-HTTP scopes, and rejects any HTTP request whose Authorization header isn't exactly 'Bearer <token>'."""
 
     def __init__(self, app, token: str):
         self.app = app
@@ -29,4 +29,8 @@ class BearerAuth:
                             "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"error": "unauthorized"}'})
                 return
+        elif scope["type"] != "lifespan":
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+            return
         await self.app(scope, receive, send)

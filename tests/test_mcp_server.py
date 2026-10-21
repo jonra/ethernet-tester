@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
 
+import anyio
 import pytest
 from starlette.testclient import TestClient
 
 from ethtester.config import Config
-from ethtester.mcp.auth import read_token
+from ethtester.checks.command import CheckError
+from ethtester.mcp.auth import BearerAuth, read_token
 from ethtester.mcp.server import build_app, resolve_bind
 from ethtester.mcp.service import ProbeError
 
@@ -82,3 +84,49 @@ def test_resolve_bind():
         resolve_bind(Config(), run=lambda cmd, **kw: "")
     with pytest.raises(ValueError):
         resolve_bind(Config(mcp_bind="0.0.0.0x"))
+
+
+def test_resolve_bind_rejects_unspecified_address():
+    with pytest.raises(ValueError, match="0.0.0.0"):
+        resolve_bind(Config(mcp_bind="0.0.0.0"))
+    with pytest.raises(SystemExit, match="0.0.0.0"):
+        resolve_bind(Config(), run=lambda cmd, **kw: "0.0.0.0\n")
+
+
+def test_resolve_bind_tailscale_unavailable():
+    def failing_run(cmd, **kw):
+        raise CheckError("tailscale: not found")
+
+    with pytest.raises(SystemExit, match="Tailscale isn't available"):
+        resolve_bind(Config(), run=failing_run)
+
+
+def test_bearer_auth_closes_websocket_without_calling_app():
+    calls = []
+    sent = []
+
+    async def inner(scope, receive, send):
+        calls.append(scope["type"])
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        sent.append(message)
+
+    anyio.run(BearerAuth(inner, TOKEN), {"type": "websocket", "headers": []}, receive, send)
+    assert calls == []
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+def test_bearer_auth_passes_lifespan_through():
+    calls = []
+
+    async def inner(scope, receive, send):
+        calls.append(scope["type"])
+
+    async def noop(*args):
+        return None
+
+    anyio.run(BearerAuth(inner, TOKEN), {"type": "lifespan"}, noop, noop)
+    assert calls == ["lifespan"]
