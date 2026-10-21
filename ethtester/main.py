@@ -1,6 +1,7 @@
 """Service entry point: collect → evaluate → log → render → display, forever."""
 
 import argparse
+import functools
 import logging
 import time
 from pathlib import Path
@@ -10,6 +11,7 @@ from .collector import Collector
 from .config import DEFAULT_CONFIG_PATH, Config, load_config
 from .display import Display, PngBackend, make_backend
 from .render import build_rows, render, render_message
+from .statefile import write_state as write_state_file
 from .statelog import StateLogger
 from .verdict import evaluate
 
@@ -22,7 +24,7 @@ CONFIG_ERROR_S = 15
 
 def run(cfg: Config, collector, display: Display, statelog: StateLogger,
         sleep=time.sleep, wall=time.time, ticks: int | None = None,
-        notify=watchdog.notify) -> None:
+        notify=watchdog.notify, write_state=None) -> None:
     done = 0
     while ticks is None or done < ticks:
         done += 1
@@ -36,6 +38,11 @@ def run(cfg: Config, collector, display: Display, statelog: StateLogger,
                 statelog.record(snapshot, verdict, now)
             except Exception:
                 log.exception("state log failed")
+            if write_state is not None:
+                try:
+                    write_state(snapshot, verdict, now)
+                except Exception:
+                    log.exception("state file write failed")
             clock_text = time.strftime("%H:%M", time.localtime(now))
             display.update(render(build_rows(snapshot, verdict), verdict, clock_text), verdict.code)
         except Exception:
@@ -81,4 +88,5 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     cfg, display = start(args.config)
-    run(cfg, Collector(cfg), display, StateLogger(Path(cfg.log_path)))
+    run(cfg, Collector(cfg), display, StateLogger(Path(cfg.log_path)),
+        write_state=functools.partial(write_state_file, Path(cfg.state_path)))

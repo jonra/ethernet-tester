@@ -23,11 +23,15 @@ class Config:
     internet_url: str = "https://1.1.1.1/cdn-cgi/trace"
     png_path: str = "/tmp/ethtester.png"
     log_path: str = "/var/log/ethtester/ethtester.log"
+    state_path: str = "/run/ethtester/state.json"
+    mcp_port: int = 8765
+    mcp_bind: str = "tailscale"
 
 
 # (low, strict): strict means the value must be above low, otherwise at least low.
 LIMITS = {"interval": (0, True), "dhcp_timeout": (0, True),
-          "ping_count": (1, False), "expected_speed": (1, False)}
+          "ping_count": (1, False), "expected_speed": (1, False),
+          "mcp_port": (1, False)}
 
 
 def _coerce(name: str, kind: type, value):

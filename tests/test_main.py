@@ -130,3 +130,27 @@ def test_start_survives_failing_startup_screen(tmp_path: Path):
 
     cfg, display = start(path, sleep=lambda s: None, backend_factory=lambda cfg: Broken())
     assert display.backend.__class__ is Broken
+
+
+from ethtester.config import Config as _Config
+from ethtester.display import Display as _Display, PngBackend as _PngBackend
+from ethtester.main import run as _run
+from ethtester.statelog import StateLogger as _StateLogger
+
+
+def test_run_writes_state_and_survives_state_failure(tmp_path):
+    cfg = _Config(display="png", png_path=str(tmp_path / "s.png"))
+    written = []
+    _run(cfg, ScriptedCollector(ok_snapshot()), _Display(_PngBackend(Path(cfg.png_path))),
+         _StateLogger(tmp_path / "a.log"), sleep=lambda d: None, wall=lambda: 1.0, ticks=1,
+         notify=lambda m: None, write_state=lambda s, v, now: written.append((v.code, now)))
+    assert written == [("OK", 1.0)]
+
+    def failing(s, v, now):
+        raise OSError("read-only")
+
+    png = tmp_path / "t.png"
+    _run(cfg, ScriptedCollector(ok_snapshot()), _Display(_PngBackend(png)),
+         _StateLogger(tmp_path / "b.log"), sleep=lambda d: None, wall=lambda: 1.0, ticks=1,
+         notify=lambda m: None, write_state=failing)
+    assert png.exists()
