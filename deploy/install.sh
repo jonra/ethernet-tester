@@ -72,7 +72,7 @@ cp "$SRC/deploy/ethtester-mcp.service" /etc/systemd/system/ethtester-mcp.service
 systemctl daemon-reload
 systemctl enable ethtester ethtester-mcp
 systemctl try-restart ethtester
-systemctl restart ethtester-mcp
+systemctl restart ethtester-mcp || echo "warning: ethtester-mcp did not start yet (is Tailscale up?)"
 
 echo "Installed. On a first install, reboot to enable SPI; on a re-run the service has been restarted."
 TS_NAME="$(tailscale status --json 2>/dev/null \
