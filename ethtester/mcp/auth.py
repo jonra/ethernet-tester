@@ -6,11 +6,15 @@ from pathlib import Path
 
 ALLOWED_NETWORKS = tuple(ipaddress.ip_network(n) for n in
                          ("100.64.0.0/10", "127.0.0.0/8", "::1/128", "fd7a:115c:a1e0::/48"))
+LAN_NETWORKS = tuple(ipaddress.ip_network(n) for n in
+                     ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fe80::/10"))
+CLIENT_MODES = ("tailscale", "lan")
 TEST_CLIENT_HOST = "testclient"  # Starlette's TestClient; not an address a real socket can have
 
 
-def client_allowed(client) -> bool:
-    """True for Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48) and loopback peers, or no peer info."""
+def client_allowed(client, clients: str = "tailscale") -> bool:
+    """True for Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48) and loopback peers, or no peer info.
+    With clients="lan", private home-network ranges (RFC 1918, fe80::/10) are allowed too."""
     if not client:
         return True
     host = client[0]
@@ -20,7 +24,8 @@ def client_allowed(client) -> bool:
         return host == TEST_CLIENT_HOST
     if addr.version == 6 and addr.ipv4_mapped is not None:
         addr = addr.ipv4_mapped
-    return any(addr in net for net in ALLOWED_NETWORKS)
+    networks = ALLOWED_NETWORKS + LAN_NETWORKS if clients == "lan" else ALLOWED_NETWORKS
+    return any(addr in net for net in networks)
 
 
 def read_token(path: Path) -> str:
@@ -35,15 +40,18 @@ def read_token(path: Path) -> str:
 
 class BearerAuth:
     """Passes lifespan through, drops other non-HTTP scopes, rejects HTTP requests from outside
-    Tailscale/loopback (403), and any whose Authorization header isn't exactly 'Bearer <token>' (401)."""
+    the allowed networks (403; Tailscale/loopback, plus private LAN ranges in "lan" mode), and any whose Authorization header isn't exactly 'Bearer <token>' (401)."""
 
-    def __init__(self, app, token: str):
+    def __init__(self, app, token: str, clients: str = "tailscale"):
+        if clients not in CLIENT_MODES:
+            raise ValueError(f"clients must be one of {CLIENT_MODES}, got {clients!r}")
         self.app = app
+        self.clients = clients
         self.expected = f"Bearer {token}".encode()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            if not client_allowed(scope.get("client")):
+            if not client_allowed(scope.get("client"), self.clients):
                 await send({"type": "http.response.start", "status": 403,
                             "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"error": "forbidden"}'})

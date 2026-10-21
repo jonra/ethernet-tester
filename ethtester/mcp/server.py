@@ -1,9 +1,10 @@
-"""MCP server: FastMCP over streamable HTTP, token-gated, listening on the Tailscale address only."""
+"""MCP server: FastMCP over streamable HTTP, token-gated, listening on the Tailscale address (or a chosen Wi-Fi interface) only."""
 
 import argparse
 import functools
 import ipaddress
 import logging
+import re
 from pathlib import Path
 
 import anyio
@@ -30,7 +31,7 @@ dhcp_renew and link_control briefly show up on the tester's own screen and in ge
 CABLE? (10M), extra flaps); treat those entries as caused by the test."""
 
 
-def build_app(service, token: str):
+def build_app(service, token: str, clients: str = "tailscale"):
     mcp = FastMCP("ethtester", instructions=INSTRUCTIONS, stateless_http=True, json_response=True,
                   transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
@@ -93,14 +94,43 @@ def build_app(service, token: str):
         """iperf3 throughput to a server running 'iperf3 -s'; seconds 3-30; reverse = download."""
         return await call(service.speed_test, server=server, seconds=seconds, reverse=reverse)
 
-    return BearerAuth(mcp.streamable_http_app(), token)
+    return BearerAuth(mcp.streamable_http_app(), token, clients)
+
+
+IFACE_RE = re.compile(r"[a-zA-Z0-9_.-]{1,15}")
+INET_RE = re.compile(r"\binet (\d+\.\d+\.\d+\.\d+)/")
+
+
+def interface_address(name: str, run=run_command) -> str | None:
+    match = INET_RE.search(run(["ip", "-4", "-o", "addr", "show", "dev", name], check=False))
+    return validate.ipv4(match.group(1)) if match else None
+
+
+def _bind_to_interface(cfg: Config, name: str, run) -> str:
+    if not IFACE_RE.fullmatch(name):
+        raise ValueError(f"mcp_bind must be 'tailscale', an IPv4 address or an interface name, got {name!r}")
+    if name == cfg.interface:
+        raise ValueError("won't serve MCP on the interface under test")
+    addr = interface_address(name, run)
+    if addr is None:
+        raise SystemExit(f"{name} has no IPv4 address yet; connect it to Wi-Fi (will retry)")
+    return addr
 
 
 def resolve_bind(cfg: Config, run=run_command) -> str:
     if cfg.mcp_bind != "tailscale":
-        addr = validate.ipv4(cfg.mcp_bind)
+        try:
+            addr = validate.ipv4(cfg.mcp_bind)
+        except ValueError:
+            addr = _bind_to_interface(cfg, cfg.mcp_bind, run)
         if ipaddress.IPv4Address(addr).is_unspecified:
             raise ValueError("mcp_bind must not be 0.0.0.0; use a specific address or 'tailscale'")
+        try:
+            test_addr = interface_address(cfg.interface, run)
+        except CheckError:
+            test_addr = None
+        if test_addr == addr:
+            raise ValueError("won't serve MCP on the interface under test")
         return addr
     try:
         addresses = run(["tailscale", "ip", "-4"], check=False).split()
@@ -127,7 +157,7 @@ def main(argv: list[str] | None = None) -> None:
     linkctl.recover()  # restore a forced link first, even if Tailscale isn't up yet
     bind = resolve_bind(cfg)
     probelog = ProbeLog(Path(cfg.log_path).with_name("probes.log"))
-    app = build_app(ProbeService(cfg, linkctl, probelog=probelog), token)
+    app = build_app(ProbeService(cfg, linkctl, probelog=probelog), token, cfg.mcp_clients)
     log.info("MCP server listening on http://%s:%d/mcp", bind, cfg.mcp_port)
     try:
         uvicorn.run(app, host=bind, port=cfg.mcp_port, log_level="info")

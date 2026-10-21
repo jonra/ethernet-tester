@@ -79,3 +79,18 @@ def test_utf8_bom_is_accepted(tmp_path: Path):
     path = tmp_path / "c.toml"
     path.write_bytes(b"\xef\xbb\xbf" + b'display = "V3"\n')
     assert load_config(path).display == "V3"
+
+
+def test_mcp_clients_default_and_values(tmp_path: Path):
+    assert Config().mcp_clients == "tailscale"
+    path = tmp_path / "ethtester.toml"
+    path.write_text('mcp_clients = "lan"\nmcp_bind = "wlan0"\n')
+    cfg = load_config(path)
+    assert cfg.mcp_clients == "lan" and cfg.mcp_bind == "wlan0"
+
+
+def test_invalid_mcp_clients_rejected(tmp_path: Path):
+    path = tmp_path / "ethtester.toml"
+    path.write_text('mcp_clients = "world"\n')
+    with pytest.raises(ValueError, match="mcp_clients"):
+        load_config(path)

@@ -9,6 +9,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path("/boot/firmware/ethtester.toml")
 DISPLAYS = ("V3", "V4", "png")
+MCP_CLIENTS = ("tailscale", "lan")
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,10 @@ class Config:
     log_path: str = "/var/log/ethtester/ethtester.log"
     state_path: str = "/run/ethtester/state.json"
     mcp_port: int = 8765
+    # "tailscale" (default), an interface name such as "wlan0", or an explicit IPv4 address
     mcp_bind: str = "tailscale"
+    # who may connect: "tailscale" (Tailscale + loopback) or "lan" (also private home-network ranges)
+    mcp_clients: str = "tailscale"
 
 
 # (low, strict): strict means the value must be above low, otherwise at least low.
@@ -72,5 +76,7 @@ def load_config(path: Path) -> Config:
     cfg = Config(**{k: _coerce(k, types[k], v) for k, v in data.items() if k in types})
     if cfg.display not in DISPLAYS:
         raise ValueError(f"display must be one of {DISPLAYS}, got {cfg.display!r}")
+    if cfg.mcp_clients not in MCP_CLIENTS:
+        raise ValueError(f"mcp_clients must be one of {MCP_CLIENTS}, got {cfg.mcp_clients!r}")
     _check_range(cfg)
     return cfg

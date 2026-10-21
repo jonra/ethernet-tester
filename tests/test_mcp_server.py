@@ -83,7 +83,7 @@ def test_resolve_bind():
     with pytest.raises(SystemExit, match="tailscale up"):
         resolve_bind(Config(), run=lambda cmd, **kw: "")
     with pytest.raises(ValueError):
-        resolve_bind(Config(mcp_bind="0.0.0.0x"))
+        resolve_bind(Config(mcp_bind="0.0.0.0/8"))
 
 
 def test_resolve_bind_rejects_unspecified_address():
@@ -132,7 +132,7 @@ def test_bearer_auth_passes_lifespan_through():
     assert calls == ["lifespan"]
 
 
-def call_http(client_addr, token=TOKEN):
+def call_http(client_addr, token=TOKEN, clients="tailscale"):
     calls = []
     sent = []
 
@@ -149,7 +149,7 @@ def call_http(client_addr, token=TOKEN):
     scope = {"type": "http", "headers": headers}
     if client_addr != "absent":
         scope["client"] = client_addr
-    anyio.run(BearerAuth(inner, TOKEN), scope, receive, send)
+    anyio.run(BearerAuth(inner, TOKEN, clients=clients), scope, receive, send)
     return calls, sent
 
 
@@ -188,3 +188,76 @@ def test_instructions_warn_that_disruptive_tools_show_up_on_screen_and_history()
     text = " ".join(INSTRUCTIONS.split())
     assert ("dhcp_renew and link_control briefly show up on the tester's own screen and in get_history "
             "(e.g. NO DHCP, CABLE? (10M), extra flaps); treat those entries as caused by the test.") in text
+
+
+def fake_ip(addresses):
+    def run(cmd, **kw):
+        assert cmd[:5] == ["ip", "-4", "-o", "addr", "show"] and cmd[5] == "dev"
+        return addresses.get(cmd[6], "")
+    return run
+
+
+WLAN0_OUT = "3: wlan0    inet 192.168.1.190/24 brd 192.168.1.255 scope global dynamic wlan0\\       valid_lft 86000sec\n"
+
+
+def test_resolve_bind_interface_name():
+    run = fake_ip({"wlan0": WLAN0_OUT})
+    assert resolve_bind(Config(mcp_bind="wlan0"), run=run) == "192.168.1.190"
+
+
+def test_resolve_bind_interface_without_address_exits():
+    with pytest.raises(SystemExit, match="wlan0 has no IPv4 address"):
+        resolve_bind(Config(mcp_bind="wlan0"), run=fake_ip({}))
+
+
+def test_resolve_bind_rejects_interface_under_test():
+    run = fake_ip({"eth0": "2: eth0    inet 10.1.1.5/24 scope global eth0\n"})
+    with pytest.raises(ValueError, match="won't serve MCP on the interface under test"):
+        resolve_bind(Config(mcp_bind="eth0", interface="eth0"), run=run)
+
+
+def test_resolve_bind_rejects_alias_with_address_of_interface_under_test():
+    run = fake_ip({"eth0": "2: eth0    inet 10.1.1.5/24 scope global eth0\n",
+                   "br0": "4: br0    inet 10.1.1.5/24 scope global br0\n"})
+    with pytest.raises(ValueError, match="won't serve MCP on the interface under test"):
+        resolve_bind(Config(mcp_bind="br0", interface="eth0"), run=run)
+
+
+def test_resolve_bind_rejects_explicit_address_of_interface_under_test():
+    run = fake_ip({"eth0": "2: eth0    inet 10.1.1.5/24 scope global eth0\n"})
+    with pytest.raises(ValueError, match="won't serve MCP on the interface under test"):
+        resolve_bind(Config(mcp_bind="10.1.1.5"), run=run)
+
+
+@pytest.mark.parametrize("name", ["wl;an", "", "a" * 16, "wl an", "wlan0\n"])
+def test_resolve_bind_rejects_bad_interface_name(name):
+    with pytest.raises(ValueError):
+        resolve_bind(Config(mcp_bind=name), run=fake_ip({}))
+
+
+def test_bearer_auth_lan_mode_allows_private_clients_with_token():
+    for addr in ["192.168.1.50", "10.2.3.4", "172.16.5.5", "fe80::1", "127.0.0.1", "100.101.102.103"]:
+        calls, sent = call_http((addr, 1234), clients="lan")
+        assert calls == [(addr, 1234)] and sent == [], addr
+
+
+def test_bearer_auth_lan_mode_rejects_public_clients_and_still_needs_token():
+    calls, sent = call_http(("8.8.8.8", 1234), clients="lan")
+    assert calls == [] and sent[0]["status"] == 403
+    calls, sent = call_http(("192.168.1.50", 1234), token="wrong", clients="lan")
+    assert calls == [] and sent[0]["status"] == 401
+
+
+def test_bearer_auth_tailscale_mode_rejects_lan_clients():
+    calls, sent = call_http(("192.168.1.50", 1234), clients="tailscale")
+    assert calls == [] and sent[0]["status"] == 403
+
+
+def test_bearer_auth_rejects_unknown_clients_mode():
+    with pytest.raises(ValueError):
+        BearerAuth(None, TOKEN, clients="world")
+
+
+def test_build_app_passes_clients_through():
+    app = build_app(FakeService(), TOKEN, clients="lan")
+    assert app.clients == "lan"
