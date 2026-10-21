@@ -7,18 +7,20 @@ from urllib.parse import urlsplit
 
 RECORD_TYPES = {"A": 1, "NS": 2, "CNAME": 5, "MX": 15, "TXT": 16, "AAAA": 28}
 LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-HOSTNAME_RE = re.compile(rf"^(?=.{{1,253}}$){LABEL}(?:\.{LABEL})*\.?$")
+HOSTNAME_RE = re.compile(rf"(?=.{{1,253}}\Z){LABEL}(?:\.{LABEL})*\.?")
 
 
 def host(value) -> str:
     if not isinstance(value, str):
         raise ValueError(f"host must be a string, got {value!r}")
+    if "%" in value:
+        raise ValueError(f"IPv6 scope IDs are not allowed: {value!r}")
     try:
         ipaddress.ip_address(value)
         return value
     except ValueError:
         pass
-    if HOSTNAME_RE.match(value):
+    if HOSTNAME_RE.fullmatch(value):
         return value
     raise ValueError(f"not a hostname or IP address: {value!r}")
 

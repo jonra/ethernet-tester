@@ -10,7 +10,7 @@ def test_host_accepts(value):
     assert validate.host(value) == value
 
 
-@pytest.mark.parametrize("value", ["", "-f", "a;b", "a b", "$(reboot)", "a..b", "x" * 254, "-c 5 1.1.1.1"])
+@pytest.mark.parametrize("value", ["", "-f", "a;b", "a b", "$(reboot)", "a..b", "x" * 254, "-c 5 1.1.1.1", "example.com\n", "1.1.1.1\n", "fe80::1%eth0"])
 def test_host_rejects(value):
     with pytest.raises(ValueError):
         validate.host(value)
