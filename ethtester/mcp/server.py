@@ -77,7 +77,8 @@ def build_app(service, token: str):
 
     @mcp.tool()
     async def link_control(action: str, duration_s: int = 60) -> dict:
-        """renegotiate, force_10 or force_100 (for 10-300 s, then autoneg is restored automatically)."""
+        """renegotiate, force_10 or force_100 for 10-300 s. Forced modes keep autonegotiation on and
+        advertise only that speed at full duplex; full advertising is restored automatically."""
         return await call(service.link_control, action=action, duration_s=duration_s)
 
     @mcp.tool()

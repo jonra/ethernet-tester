@@ -1,9 +1,20 @@
 import pytest
 
-from ethtester.mcp.linkctl import Busy, LinkControl
+from ethtester.mcp.linkctl import Busy, LinkControl, full_advertise_mask
+from ethtester.mcp.probes import parse_ethtool
 
 AUTONEG_ON = "Settings for eth0:\n\tSpeed: 100Mb/s\n\tAuto-negotiation: on\n"
 AUTONEG_OFF = "Settings for eth0:\n\tSpeed: 10Mb/s\n\tAuto-negotiation: off\n"
+RESTORE = ["ethtool", "-s", "eth0", "autoneg", "on", "advertise", "0x00f"]
+MODES_100 = "10baseT/Half 10baseT/Full\n\t                        100baseT/Half 100baseT/Full"
+
+
+def ethtool_out(advertised=MODES_100, autoneg="on", supported=MODES_100):
+    return ("Settings for eth0:\n"
+            f"\tSupported link modes:   {supported}\n"
+            f"\tAdvertised link modes:  {advertised}\n"
+            "\tSpeed: 100Mb/s\n"
+            f"\tAuto-negotiation: {autoneg}\n")
 
 
 class FakeRun:
@@ -47,18 +58,18 @@ def test_renegotiate():
 def test_force_holds_lock_until_revert():
     run, ctl = make()
     assert ctl.force(10, 60) == {"action": "force_10", "reverts_in_s": 60}
-    assert run.calls[0] == ["ethtool", "-s", "eth0", "speed", "10", "duplex", "full", "autoneg", "off"]
+    assert run.calls[0] == ["ethtool", "-s", "eth0", "advertise", "0x002"]
     assert ctl.revert_in() == 60.0
     with pytest.raises(Busy, match="reverts in 60"):
         ctl.renegotiate()
     with pytest.raises(Busy):
         with ctl.exclusive():
             pass
-    run.ethtool = AUTONEG_OFF
+    run.ethtool = ethtool_out(advertised="10baseT/Full")
     timer = FakeTimer.created[0]
     assert timer.delay == 60 and timer.daemon is True
     timer.fn()
-    assert run.calls[-1] == ["ethtool", "-s", "eth0", "autoneg", "on"]
+    assert run.calls[-1] == RESTORE
     assert ctl.revert_in() is None
     with ctl.exclusive():
         pass
@@ -78,13 +89,49 @@ def test_force_failure_releases_lock():
         pass
 
 
-def test_restore_only_when_autoneg_off():
+def test_force_100_advertises_100_full_only():
+    run, ctl = make()
+    ctl.force(100, 30)
+    assert run.calls[0] == ["ethtool", "-s", "eth0", "advertise", "0x008"]
+
+
+def test_restore_runs_when_autoneg_off():
     run, ctl = make()
     ctl.restore_autoneg()
-    assert ["ethtool", "-s", "eth0", "autoneg", "on"] not in run.calls
+    assert not any(c[:2] == ["ethtool", "-s"] for c in run.calls)
     run.ethtool = AUTONEG_OFF
     ctl.restore_autoneg()
-    assert run.calls[-1] == ["ethtool", "-s", "eth0", "autoneg", "on"]
+    assert run.calls[-1] == RESTORE
+    run.ethtool = ethtool_out(autoneg="off")
+    ctl.restore_autoneg()
+    assert run.calls[-1] == RESTORE
+
+
+def test_restore_runs_when_advertising_is_restricted():
+    run, ctl = make(FakeRun(ethtool=ethtool_out(advertised="100baseT/Full")))
+    ctl.restore_autoneg()
+    assert run.calls[-1] == RESTORE
+
+
+def test_restore_noop_when_advertising_everything_supported():
+    reordered = "100baseT/Full 100baseT/Half 10baseT/Full 10baseT/Half"
+    run, ctl = make(FakeRun(ethtool=ethtool_out(advertised=reordered)))
+    ctl.restore_autoneg()
+    assert run.calls == [["ethtool", "eth0"]]
+
+
+def test_full_advertise_mask_from_supported_modes():
+    assert full_advertise_mask(parse_ethtool(ethtool_out())) == 0x00f
+    gig = "10baseT/Full 100baseT/Full 1000baseT/Half 1000baseT/Full 2500baseT/Full"
+    assert full_advertise_mask(parse_ethtool(ethtool_out(supported=gig))) == 0x03a
+    assert full_advertise_mask(parse_ethtool(ethtool_out(supported="2500baseT/Full"))) == 0x00f
+    assert full_advertise_mask(parse_ethtool(AUTONEG_ON)) == 0x00f
+
+
+def test_restore_uses_mask_of_supported_modes():
+    run, ctl = make(FakeRun(ethtool=ethtool_out(advertised="10baseT/Full", supported="10baseT/Full 100baseT/Full")))
+    ctl.restore_autoneg()
+    assert run.calls[-1] == ["ethtool", "-s", "eth0", "autoneg", "on", "advertise", "0x00a"]
 
 
 def test_recover_reconnects_disconnected_device():
@@ -105,7 +152,7 @@ class Scripted(FakeRun):
 
     def __call__(self, cmd, **kwargs):
         if cmd[:2] == ["ethtool", "-s"]:
-            if "off" in cmd:
+            if "autoneg" not in cmd:
                 self.calls.append(cmd)
                 if self.fail_force:
                     raise RuntimeError("ethtool failed")
@@ -125,7 +172,7 @@ def test_force_ethtool_failure_attempts_restore():
     _, ctl = make(run)
     with pytest.raises(RuntimeError, match="ethtool failed"):
         ctl.force(100, 30)
-    assert ["ethtool", "-s", "eth0", "autoneg", "on"] in run.calls
+    assert RESTORE in run.calls
     with ctl.exclusive():
         pass
 
@@ -139,7 +186,7 @@ def test_timer_start_failure_releases_lock_and_restores():
     ctl = LinkControl("eth0", run=run, timer=BadTimer, clock=lambda: 100.0)
     with pytest.raises(RuntimeError, match="thread"):
         ctl.force(10, 60)
-    assert run.calls[-1] == ["ethtool", "-s", "eth0", "autoneg", "on"]
+    assert run.calls[-1] == RESTORE
     assert ctl.revert_in() is None
     with ctl.exclusive():
         pass
@@ -152,7 +199,7 @@ def test_revert_retries_until_autoneg_restored():
     ctl = LinkControl("eth0", run=run, timer=FakeTimer, clock=lambda: 100.0, sleep=sleeps.append)
     ctl.force(10, 60)
     FakeTimer.created[0].fn()
-    restores = [c for c in run.calls if c == ["ethtool", "-s", "eth0", "autoneg", "on"]]
+    restores = [c for c in run.calls if c == RESTORE]
     assert len(restores) == 3
     assert len(sleeps) == 2
     assert ctl.revert_in() is None
@@ -166,7 +213,7 @@ def test_revert_gives_up_after_three_attempts_and_still_unlocks():
     ctl = LinkControl("eth0", run=run, timer=FakeTimer, clock=lambda: 100.0, sleep=lambda s: None)
     ctl.force(10, 60)
     FakeTimer.created[0].fn()
-    assert len([c for c in run.calls if c == ["ethtool", "-s", "eth0", "autoneg", "on"]]) == 3
+    assert len([c for c in run.calls if c == RESTORE]) == 3
     assert ctl.revert_in() is None
     with ctl.exclusive():
         pass

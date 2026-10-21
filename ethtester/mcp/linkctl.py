@@ -1,4 +1,7 @@
-"""Link changes for diagnosis: renegotiate or force a speed, always reverting to autoneg."""
+"""Link changes for diagnosis: renegotiate or force a speed, always reverting to full advertising.
+
+Forcing keeps autonegotiation on and only narrows what is advertised, so the link partner sees the
+reduced speed at full duplex instead of falling back to half duplex (a duplex mismatch)."""
 
 import logging
 import threading
@@ -12,6 +15,18 @@ log = logging.getLogger(__name__)
 
 REVERT_ATTEMPTS = 3
 REVERT_RETRY_S = 2.0
+MODE_BITS = {"10baseT/Half": 0x001, "10baseT/Full": 0x002, "100baseT/Half": 0x004, "100baseT/Full": 0x008,
+             "1000baseT/Half": 0x010, "1000baseT/Full": 0x020}
+FORCE_MASKS = {10: MODE_BITS["10baseT/Full"], 100: MODE_BITS["100baseT/Full"]}
+FALLBACK_MASK = 0x00f
+
+
+def full_advertise_mask(settings: dict) -> int:
+    """ethtool advertise mask for every supported mode we know; 10/100 half+full if none are known."""
+    mask = 0
+    for mode in settings.get("supported_modes") or []:
+        mask |= MODE_BITS.get(mode, 0)
+    return mask or FALLBACK_MASK
 
 
 class Busy(Exception):
@@ -53,11 +68,15 @@ class LinkControl:
         return {"action": "renegotiate"}
 
     def force(self, speed: int, duration_s: int) -> dict:
-        """Forces a speed and keeps the lock until the timer has restored autoneg."""
+        """Advertises only one speed at full duplex (autoneg stays on) and keeps the lock until the
+        timer has restored full advertising."""
+        mask = FORCE_MASKS.get(speed)
+        if mask is None:
+            raise ValueError(f"speed must be 10 or 100, got {speed!r}")
         if not self.lock.acquire(blocking=False):
             raise Busy(self._busy_message())
         try:
-            self.run(["ethtool", "-s", self.interface, "speed", str(speed), "duplex", "full", "autoneg", "off"])
+            self.run(["ethtool", "-s", self.interface, "advertise", f"0x{mask:03x}"])
         except Exception:
             self._restore_quietly()
             self.lock.release()
@@ -95,10 +114,15 @@ class LinkControl:
             self.lock.release()
 
     def restore_autoneg(self) -> None:
-        """Turns autoneg back on only when it is off, so a healthy link doesn't bounce."""
+        """Restores autoneg with every supported mode advertised, but only when autoneg is off or the
+        advertised modes are restricted, so a healthy link doesn't bounce."""
         settings = parse_ethtool(self.run(["ethtool", self.interface], check=False))
-        if settings["speed"] is not None and not settings["autoneg"]:
-            self.run(["ethtool", "-s", self.interface, "autoneg", "on"])
+        if settings["speed"] is None:
+            return
+        restricted = set(settings["advertised_modes"]) != set(settings["supported_modes"])
+        if not settings["autoneg"] or restricted:
+            mask = full_advertise_mask(settings)
+            self.run(["ethtool", "-s", self.interface, "autoneg", "on", "advertise", f"0x{mask:03x}"])
 
     def recover(self) -> None:
         """Undoes anything a crashed previous run may have left: forced speed, disconnected device."""
