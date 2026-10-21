@@ -69,7 +69,7 @@ def _probe_screen(read_activity, selector, verdict_code: str, now: float, clock_
         activity = read_activity()
         if selector.choose(activity, verdict_code, now) != "probe":
             return None
-        return render_probe(activity, clock_text), f"PROBE:{activity['state']}", selector.fast(activity)
+        return render_probe(activity, clock_text), f"PROBE:{activity['state']}:{activity['id']}", selector.fast(activity)
     except Exception:
         log.exception("probe screen failed")
         return None

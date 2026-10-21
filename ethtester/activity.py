@@ -4,6 +4,7 @@ The MCP service writes it (atomically, like statefile); the display loop reads i
 treats anything missing or malformed as "no activity"."""
 
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -25,7 +26,7 @@ def write_activity(path: Path, data: dict) -> None:
 
 
 def _number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _valid(data) -> bool:

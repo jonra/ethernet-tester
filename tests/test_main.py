@@ -209,9 +209,9 @@ def test_run_shows_probe_screen_fast_while_running_then_holds_then_returns():
     shown, delays = run_screens([ok, ok, ok, down],
                                 [ACT, ACT_DONE, ACT_DONE, ACT_DONE],
                                 [1000.5, 1002.0, 1010.0, 1020.0])
-    assert shown[0] == (render_probe(ACT, clock_at(1000.5)).tobytes(), "PROBE:running")
-    assert shown[1] == (render_probe(ACT_DONE, clock_at(1002.0)).tobytes(), "PROBE:ok")
-    assert shown[2][1] == "PROBE:ok"
+    assert shown[0] == (render_probe(ACT, clock_at(1000.5)).tobytes(), "PROBE:running:1")
+    assert shown[1] == (render_probe(ACT_DONE, clock_at(1002.0)).tobytes(), "PROBE:ok:1")
+    assert shown[2][1] == "PROBE:ok:1"
     assert shown[3] == (ethernet_image(down, 1020.0), "NO_LINK")   # verdict changed: Ethernet again
     assert delays == [FAST_INTERVAL, 5, 5, FAST_INTERVAL]
 
@@ -259,3 +259,10 @@ def test_main_wires_activity_reader_and_selector(tmp_path, monkeypatch):
     from ethtester.activity import write_activity
     write_activity(tmp_path / "a.json", ACT)
     assert captured["read_activity"]() == ACT
+
+
+def test_probe_display_code_includes_activity_id_so_new_probe_gets_full_refresh():
+    ok = ok_snapshot()
+    other = {**ACT_DONE, "id": "2"}
+    shown, _ = run_screens([ok, ok, ok], [ACT_DONE, ACT_DONE, other], [1002.0, 1003.0, 1004.0])
+    assert [code for _, code in shown] == ["PROBE:ok:1", "PROBE:ok:1", "PROBE:ok:2"]

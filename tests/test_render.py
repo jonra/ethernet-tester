@@ -158,3 +158,11 @@ def test_render_probe_text_fits_and_is_truncated():
     assert probe_lines(draw, PROBE_SAMPLES["probe_error"], "10:42")["verdict"] == "FAILED"
     assert probe_lines(draw, {**PROBE_BASE, "calls": 1}, "09:00")["right"] == "1 call 09:00"
     assert probe_lines(draw, {**PROBE_BASE, "tool": "dhcp_renew", "target": ""}, "09:00")["header"] == "PROBE  dhcp_renew"
+
+
+def test_probe_lines_defensively_strip_control_characters():
+    from ethtester.render import probe_lines
+    draw = ImageDraw.Draw(render_message("x", "y"))
+    act = {**PROBE_BASE, "target": "a\r\nb", "summary": ["x\ny\x07z"]}
+    lines = probe_lines(draw, act, "10:42")
+    assert lines["header"] == "PROBE  ping a b" and lines["body"] == ["x y z"]

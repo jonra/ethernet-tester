@@ -141,7 +141,7 @@ class ProbeService:
             else:
                 state, lines = "error", summary.error_summary(str(error))
             data = {**activity, "state": state, "finished": finished, "summary": lines,
-                    "settle_until": finished + self._settle_s(tool, args, result)}
+                    "settle_until": finished + self._settle_s(tool, args, result, error)}
             with self._activity_lock:
                 if self._activity_id == activity["id"]:
                     write_activity(self.activity_path, data)
@@ -149,8 +149,10 @@ class ProbeService:
             log.exception("activity write failed")
 
     @staticmethod
-    def _settle_s(tool: str, args: dict, result) -> float:
+    def _settle_s(tool: str, args: dict, result, error=None) -> float:
         """Seconds after finishing during which the probe's own link disturbance is expected."""
+        if error is not None or result is None:
+            return 0   # the call raised: nothing was changed, so nothing to settle
         if tool == "dhcp_renew":
             return SETTLE_S
         if tool != "link_control":

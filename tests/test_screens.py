@@ -82,6 +82,17 @@ def test_error_result_follows_the_same_rules():
 def test_stale_running_activity_gives_up_after_hold():
     # the MCP server died mid-probe: don't show RUNNING (and poll fast) forever
     sel = ScreenSelector(hold_s=300)
-    assert sel.choose(running(started=1000.0), "OK", 1200.0) == "probe"
+    assert sel.choose(running(started=1000.0), "OK", 1170.0) == "probe"
     assert sel.choose(running(started=1000.0), "OK", 1300.0) == "ethernet"
     assert sel.fast(running(started=1000.0)) is False
+
+
+def test_clock_step_back_expires_activity():
+    assert ScreenSelector().choose(done(finished=1010.0), "OK", 1000.0) == "ethernet"
+    assert ScreenSelector().choose(running(started=1010.0), "OK", 1000.0) == "ethernet"
+
+
+def test_running_activity_stale_after_180s_even_with_longer_hold():
+    sel = ScreenSelector(hold_s=300)
+    assert sel.choose(running(started=1000.0), "OK", 1179.0) == "probe"
+    assert sel.choose(running(started=1000.0), "OK", 1180.0) == "ethernet"

@@ -1,5 +1,6 @@
 """Turns a snapshot and verdict into the 250×122 one-bit screen image."""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,9 +166,14 @@ PROBE_RIGHT_Y = 96
 PROBE_VERDICTS = {"running": "RUNNING…", "ok": "OK", "error": "FAILED"}
 
 
+def _one_line(text) -> str:
+    return re.sub(r"[\s\x00-\x1f\x7f-\x9f]+",
+                  lambda m: m.group() if set(m.group()) == {" "} else " ", str(text)).strip()
+
+
 def probe_lines(draw: ImageDraw.ImageDraw, activity: dict, clock_text: str) -> dict:
     """The probe screen's texts, already fitted to their widths."""
-    target = activity.get("target") or ""
+    target = _one_line(activity.get("target") or "")
     header = f"PROBE  {activity['tool']}" + (f" {target}" if target else "")
     calls = activity.get("calls", 0)
     right = f"{calls} call{'' if calls == 1 else 's'} {clock_text}"
@@ -179,7 +185,7 @@ def probe_lines(draw: ImageDraw.ImageDraw, activity: dict, clock_text: str) -> d
     return {
         "header": _fit(draw, header, header_font, WIDTH - 4),
         "header_font": header_font,
-        "body": [_fit(draw, line, ROW_FONT, WIDTH - 4)
+        "body": [_fit(draw, _one_line(line), ROW_FONT, WIDTH - 4)
                  for line in activity.get("summary", [])[:PROBE_MAX_LINES]],
         "verdict": _fit(draw, verdict, HEAD_FONT, WIDTH - right_width - 12),
         "right": right,

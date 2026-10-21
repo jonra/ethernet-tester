@@ -63,3 +63,11 @@ def test_read_tolerates_binary_and_directories(tmp_path: Path):
     path.write_bytes(b"\xff\xfe\x00garbage")
     assert read_activity(path) is None
     assert read_activity(tmp_path) is None
+
+
+@pytest.mark.parametrize("field", ["started", "finished", "settle_until"])
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_timestamps_are_rejected(tmp_path: Path, field, bad):
+    path = tmp_path / "activity.json"
+    path.write_text(json.dumps({**DONE, field: bad}))   # json emits NaN / Infinity
+    assert read_activity(path) is None

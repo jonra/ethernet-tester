@@ -5,6 +5,7 @@ changes from its baseline or hold_s seconds have passed. The baseline is the ver
 tick at or after the activity's settle_until, so a probe's own disturbance doesn't dismiss it."""
 
 PROBE, ETHERNET = "probe", "ethernet"
+RUNNING_STALE_S = 180  # a probe never legitimately runs longer than this
 
 
 class ScreenSelector:
@@ -26,12 +27,13 @@ class ScreenSelector:
             return ETHERNET
         if activity["state"] == "running":
             # A running activity older than hold_s means the MCP server died mid-probe.
-            if now - activity["started"] >= self.hold_s:
+            # A clock step back (now < started) is treated the same way.
+            if now < activity["started"] or now - activity["started"] >= min(self.hold_s, RUNNING_STALE_S):
                 self._dismissed = True
                 return ETHERNET
             return PROBE
         finished = activity["finished"]
-        if now - finished >= self.hold_s:
+        if now < finished or now - finished >= self.hold_s:
             self._dismissed = True
             return ETHERNET
         settle_until = activity.get("settle_until")

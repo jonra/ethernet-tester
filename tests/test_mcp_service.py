@@ -340,3 +340,20 @@ def test_no_activity_path_writes_nothing(tmp_path):
     service, *_ = make(tmp_path)
     service.ping("1.1.1.1")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["probes.log"]
+
+
+def test_settle_is_zero_when_the_call_raised(tmp_path):
+    settle = ProbeService._settle_s
+    assert settle("link_control", {"action": "force_100", "duration_s": 30}, None) == 0
+    assert settle("link_control", {"action": "renegotiate"}, None) == 0
+    assert settle("dhcp_renew", {}, None) == 0
+
+
+def test_failed_link_control_gets_no_settle(tmp_path, monkeypatch):
+    path = tmp_path / "activity.json"
+    service, *_ = make(tmp_path, activity_path=path)
+    monkeypatch.setattr(service.linkctl, "force", lambda *a: (_ for _ in ()).throw(Busy("busy")))
+    with pytest.raises(Exception):
+        service.link_control("force_100", duration_s=30)
+    done = read_activity(path)
+    assert done["state"] == "error" and done["settle_until"] == done["finished"]

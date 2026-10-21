@@ -1,6 +1,7 @@
 """Short, screen-sized summaries of probe results for the tester's probe screen."""
 
 import logging
+import re
 import textwrap
 
 log = logging.getLogger(__name__)
@@ -8,6 +9,15 @@ log = logging.getLogger(__name__)
 MAX_LINES = 4
 ERROR_LINES = 2
 LINE_CHARS = 37  # what fits across the 250 px screen in the 11 px row font
+
+
+_JUNK = re.compile(r"[\s\x00-\x1f\x7f-\x9f]+")
+
+
+def clean(text) -> str:
+    """One line: any run of whitespace or control characters becomes a single space."""
+    # A run of plain spaces is kept: the summaries use double spaces as column separators.
+    return _JUNK.sub(lambda m: m.group() if set(m.group()) == {" "} else " ", str(text)).strip()
 
 
 def _plural(n: int, word: str) -> str:
@@ -94,7 +104,7 @@ def summarise(tool: str, args: dict, result) -> list[str]:
     if fn is None or not isinstance(result, dict):
         return []
     try:
-        return [str(line) for line in fn(result)][:MAX_LINES]
+        return [clean(line) for line in fn(result)][:MAX_LINES]
     except Exception:
         log.debug("could not summarise %s result", tool, exc_info=True)
         return []
@@ -121,8 +131,8 @@ def target_of(tool: str, args: dict) -> str:
     """What the probe is aimed at, for the probe screen's header."""
     if tool == "dns_lookup":
         name, qtype = args.get("name"), str(args.get("record_type") or "A").upper()
-        return f"{name}" + ("" if qtype == "A" else f" {qtype}")
+        return clean(f"{name}" + ("" if qtype == "A" else f" {qtype}"))
     key = {"ping": "host", "traceroute": "host", "http_check": "url", "speed_test": "server",
            "link_control": "action"}.get(tool)
     value = args.get(key) if key else None
-    return "" if value is None else str(value)
+    return "" if value is None else clean(value)

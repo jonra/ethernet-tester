@@ -104,3 +104,13 @@ def test_target_of():
     assert target_of("dhcp_renew", {}) == ""
     assert target_of("neighbour_scan", {}) == ""
     assert target_of("ping", {"host": 5}) == "5"
+
+
+def test_summaries_and_target_have_no_newlines_or_control_chars():
+    lines = summarise("dns_lookup", {}, {"rcode": "NOERROR", "server": "1.1.1.1", "ms": 3,
+                                          "answers": [{"data": "a\nb"}]})
+    assert lines[1] == "a b"
+    assert error_summary("boom\r\nsecond")[0] == "boom"
+    lines = summarise("http_check", {}, {"ok": False, "error": "bad\r\n\tthing\x07x"})
+    assert lines == ["bad thing x"]
+    assert target_of("ping", {"host": " a\r\nb\x00c "}) == "a b c"
