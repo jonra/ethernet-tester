@@ -42,7 +42,8 @@ raspi-config nonint do_spi 0
 systemctl enable --now lldpd
 
 NM_SETTINGS=(connection.interface-name "$IFACE" ipv4.method auto ipv4.dhcp-timeout 2147483647
-  ipv6.method ignore connection.autoconnect-retries 0 connection.autoconnect-priority 10)
+  ipv6.method ignore connection.autoconnect-retries 0 connection.autoconnect-priority 10
+  ipv4.route-metric 2000 ipv4.dns-priority 200)
 if nmcli -t -f NAME connection show | grep -x ethtester >/dev/null; then
   nmcli connection modify ethtester "${NM_SETTINGS[@]}"
 else
