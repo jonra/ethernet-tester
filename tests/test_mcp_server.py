@@ -130,3 +130,55 @@ def test_bearer_auth_passes_lifespan_through():
 
     anyio.run(BearerAuth(inner, TOKEN), {"type": "lifespan"}, noop, noop)
     assert calls == ["lifespan"]
+
+
+def call_http(client_addr, token=TOKEN):
+    calls = []
+    sent = []
+
+    async def inner(scope, receive, send):
+        calls.append(scope.get("client"))
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        sent.append(message)
+
+    headers = [(b"authorization", f"Bearer {token}".encode())] if token else []
+    scope = {"type": "http", "headers": headers}
+    if client_addr != "absent":
+        scope["client"] = client_addr
+    anyio.run(BearerAuth(inner, TOKEN), scope, receive, send)
+    return calls, sent
+
+
+def test_bearer_auth_rejects_non_tailscale_client_before_token_check():
+    calls, sent = call_http(("192.168.1.50", 1234))
+    assert calls == []
+    assert sent[0]["status"] == 403
+    calls, sent = call_http(("192.168.1.50", 1234), token=None)
+    assert calls == [] and sent[0]["status"] == 403
+
+
+@pytest.mark.parametrize("addr", ["100.101.102.103", "100.64.0.1", "127.0.0.1", "::1", "fd7a:115c:a1e0::1234"])
+def test_bearer_auth_allows_tailscale_and_loopback_clients(addr):
+    calls, sent = call_http((addr, 1234))
+    assert calls == [(addr, 1234)] and sent == []
+
+
+@pytest.mark.parametrize("addr", ["100.128.0.1", "10.0.0.5", "fd7a:115c:a1e1::1", "2001:db8::1", "example.com"])
+def test_bearer_auth_rejects_other_clients(addr):
+    calls, sent = call_http((addr, 1234))
+    assert calls == [] and sent[0]["status"] == 403
+
+
+def test_bearer_auth_tailscale_client_still_needs_token():
+    calls, sent = call_http(("100.101.102.103", 1234), token="wrong")
+    assert calls == [] and sent[0]["status"] == 401
+
+
+@pytest.mark.parametrize("client_addr", ["absent", None, ("testclient", 50000)])
+def test_bearer_auth_allows_missing_client_and_testclient(client_addr):
+    calls, sent = call_http(client_addr)
+    assert len(calls) == 1 and sent == []
