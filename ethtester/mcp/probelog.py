@@ -7,6 +7,14 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+MAX_ARG_CHARS = 256
+
+
+def _clip(value):
+    if isinstance(value, str) and len(value) > MAX_ARG_CHARS:
+        return value[:MAX_ARG_CHARS] + "…"
+    return value
+
 
 class ProbeLog:
     def __init__(self, path: Path):
@@ -21,5 +29,6 @@ class ProbeLog:
     def record(self, tool: str, args: dict, duration_s: float, ok: bool, error: str | None = None,
                wall_time: float | None = None) -> None:
         when = datetime.fromtimestamp(wall_time if wall_time is not None else time.time())
-        self.logger.info(json.dumps({"ts": when.isoformat(timespec="seconds"), "tool": tool, "args": args,
+        self.logger.info(json.dumps({"ts": when.isoformat(timespec="seconds"), "tool": tool,
+                                     "args": {k: _clip(v) for k, v in args.items()},
                                      "duration_s": duration_s, "ok": ok, "error": error}))

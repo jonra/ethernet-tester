@@ -25,7 +25,9 @@ DEFAULT_TOKEN_PATH = Path("/etc/ethtester/mcp-token")
 INSTRUCTIONS = """Ethernet tester on a Raspberry Pi. Every probe runs through its Ethernet dongle only,
 never Wi-Fi, so results describe the cable/port it is plugged into. Start with get_status. The dongle is
 100 Mbit only, so 100M links are normal. dhcp_renew, link_control and neighbour_scan disturb the link
-briefly and can't run at the same time; forced speeds revert to autonegotiation automatically."""
+briefly and can't run at the same time; forced speeds revert to autonegotiation automatically.
+dhcp_renew and link_control briefly show up on the tester's own screen and in get_history (e.g. NO DHCP,
+CABLE? (10M), extra flaps); treat those entries as caused by the test."""
 
 
 def build_app(service, token: str):

@@ -8,7 +8,7 @@ from starlette.testclient import TestClient
 from ethtester.config import Config
 from ethtester.checks.command import CheckError
 from ethtester.mcp.auth import BearerAuth, read_token
-from ethtester.mcp.server import build_app, resolve_bind
+from ethtester.mcp.server import INSTRUCTIONS, build_app, resolve_bind
 from ethtester.mcp.service import ProbeError
 
 TOKEN = "s3cret-token"
@@ -182,3 +182,9 @@ def test_bearer_auth_tailscale_client_still_needs_token():
 def test_bearer_auth_allows_missing_client_and_testclient(client_addr):
     calls, sent = call_http(client_addr)
     assert len(calls) == 1 and sent == []
+
+
+def test_instructions_warn_that_disruptive_tools_show_up_on_screen_and_history():
+    text = " ".join(INSTRUCTIONS.split())
+    assert ("dhcp_renew and link_control briefly show up on the tester's own screen and in get_history "
+            "(e.g. NO DHCP, CABLE? (10M), extra flaps); treat those entries as caused by the test.") in text
