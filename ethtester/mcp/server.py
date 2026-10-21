@@ -31,7 +31,7 @@ dhcp_renew and link_control briefly show up on the tester's own screen and in ge
 CABLE? (10M), extra flaps); treat those entries as caused by the test."""
 
 
-def build_app(service, token: str, clients: str = "tailscale"):
+def build_app(service, token: str | None, clients: str = "tailscale"):
     mcp = FastMCP("ethtester", instructions=INSTRUCTIONS, stateless_http=True, json_response=True,
                   transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
@@ -152,7 +152,12 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     cfg = load_config(args.config)
-    token = read_token(args.token_file)
+    if cfg.mcp_auth == "token":
+        token = read_token(args.token_file)
+    else:
+        token = None
+        log.warning("MCP authentication is disabled (mcp_auth = \"none\"); anyone allowed by "
+                    "mcp_clients can run probes")
     linkctl = LinkControl(cfg.interface)
     linkctl.recover()  # restore a forced link first, even if Tailscale isn't up yet
     bind = resolve_bind(cfg)

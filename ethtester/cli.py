@@ -20,15 +20,15 @@ plugged into. Start with 'status'. The dongle is 100 Mbit only, so a 100M link i
 
 Output is JSON on stdout (pretty-printed). Errors go to stderr.
 Exit codes: 0 OK, 1 tool error (the probe failed, e.g. no link), 2 connection/config error
-(unreachable, bad token, missing url/token).
+(unreachable, bad token, missing url).
 
 'renew-dhcp' and 'link-control' briefly disturb the tested port: the tester's own screen and
 'history' show NO DHCP / CABLE? / extra flaps for a short time. Treat those as caused by the test.
 'link-control' forced speeds revert to autonegotiation automatically. renew-dhcp, link-control and
 neighbours can't run at the same time. speedtest needs 'iperf3 -s' running on SERVER.
 
-Setup: 'ethtester configure --url http://HOST:8765/mcp' (token is read from stdin if --token is
-omitted). Settings resolve as: --url/--token flags, then ETHTESTER_URL/ETHTESTER_TOKEN env,
+Setup: 'ethtester configure --url http://HOST:8765/mcp' (the token is read from stdin if --token is
+omitted; leave it empty if the tester runs with mcp_auth = "none", then no Authorization header is sent). Settings resolve as: --url/--token flags, then ETHTESTER_URL/ETHTESTER_TOKEN env,
 then ~/.config/ethtester/cli.toml (override the path with ETHTESTER_CONFIG).
 
 Examples:
@@ -55,8 +55,9 @@ def rpc(url: str, token: str, method: str, params: dict, timeout: float = DEFAUL
     request = urllib.request.Request(url, data=body, method="POST", headers={
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
-        "Authorization": f"Bearer {token}",
     })
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
     try:
         with opener(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8", "replace")
@@ -121,21 +122,21 @@ def load_file_config(path: Path) -> dict:
         raise CliError(f"cannot read config {path}: {exc}") from None
 
 
-def resolve_settings(url=None, token=None, env=None) -> tuple[str, str]:
+def resolve_settings(url=None, token=None, env=None) -> tuple[str, str | None]:
     env = os.environ if env is None else env
     file_cfg = load_file_config(config_path(env))
     url = url or env.get("ETHTESTER_URL") or file_cfg.get("url")
     token = token or env.get("ETHTESTER_TOKEN") or file_cfg.get("token")
-    if not url or not token:
-        missing = " and ".join(n for n, v in (("url", url), ("token", token)) if not v)
-        raise CliError(f"missing {missing}: run 'ethtester configure --url URL' "
-                       "(or set ETHTESTER_URL / ETHTESTER_TOKEN)")
-    return str(url), str(token)
+    if not url:
+        raise CliError("missing url: run 'ethtester configure --url URL' (or set ETHTESTER_URL)")
+    return str(url), str(token) if token else None
 
 
-def write_config(path: Path, url: str, token: str) -> None:
+def write_config(path: Path, url: str, token: str | None) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    content = f"url = {json.dumps(url)}\ntoken = {json.dumps(token)}\n"
+    content = f"url = {json.dumps(url)}\n"
+    if token:
+        content += f"token = {json.dumps(token)}\n"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(content)
@@ -170,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ethtester", description="Command-line client for the ethtester network tester (MCP server on a Raspberry Pi).",
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", help="MCP endpoint, e.g. http://192.168.1.190:8765/mcp (env ETHTESTER_URL)")
-    p.add_argument("--token", help="bearer token (env ETHTESTER_TOKEN)")
+    p.add_argument("--token", help="bearer token, if the tester needs one (env ETHTESTER_TOKEN)")
     p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
                    help=f"HTTP timeout in seconds (default {DEFAULT_TIMEOUT:.0f})")
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -208,16 +209,17 @@ def build_parser() -> argparse.ArgumentParser:
     add("tools", "list the server's tools with a one-line description")
     s = add("configure", "save the server URL and token to the config file")
     s.add_argument("--url", dest="cfg_url", required=True, help="MCP endpoint URL")
-    s.add_argument("--token", dest="cfg_token", help="bearer token (read from stdin if omitted)")
+    s.add_argument("--token", dest="cfg_token", help="bearer token (read from stdin if omitted; empty means none)")
     return p
 
 
 def _configure(args, stdin) -> int:
     token = args.cfg_token
     if token is None:
+        if stdin.isatty():
+            sys.stderr.write("token (leave empty for none): ")
+            sys.stderr.flush()
         token = stdin.readline().strip()
-    if not token:
-        raise CliError("no token given (pass --token or pipe it on stdin)")
     path = config_path()
     write_config(path, args.cfg_url, token)
     print(f"saved config to {path}")

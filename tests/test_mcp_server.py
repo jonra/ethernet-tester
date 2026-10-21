@@ -132,7 +132,7 @@ def test_bearer_auth_passes_lifespan_through():
     assert calls == ["lifespan"]
 
 
-def call_http(client_addr, token=TOKEN, clients="tailscale"):
+def call_http(client_addr, token=TOKEN, clients="tailscale", server_token=TOKEN):
     calls = []
     sent = []
 
@@ -149,7 +149,7 @@ def call_http(client_addr, token=TOKEN, clients="tailscale"):
     scope = {"type": "http", "headers": headers}
     if client_addr != "absent":
         scope["client"] = client_addr
-    anyio.run(BearerAuth(inner, TOKEN, clients=clients), scope, receive, send)
+    anyio.run(BearerAuth(inner, server_token, clients=clients), scope, receive, send)
     return calls, sent
 
 
@@ -287,3 +287,52 @@ def test_main_passes_activity_path_to_service(tmp_path, monkeypatch):
     monkeypatch.setattr(server.uvicorn, "run", lambda app, **kw: None)
     server.main(["--config", str(cfg_path), "--token-file", str(tmp_path / "t")])
     assert built[0].activity_path == tmp_path / "a.json"
+
+
+def test_no_token_mode_skips_bearer_check_for_lan_client():
+    calls, sent = call_http(("192.168.1.50", 1234), token=None, clients="lan", server_token=None)
+    assert calls and sent == []
+
+
+def test_no_token_mode_still_rejects_outside_clients():
+    calls, sent = call_http(("8.8.8.8", 1234), token=None, clients="lan", server_token=None)
+    assert calls == [] and sent[0]["status"] == 403
+
+
+def test_no_token_app_lists_tools_without_authorization_header():
+    with TestClient(build_app(FakeService(), None, "lan"), base_url=HOST, client=("192.168.1.50", 5000)) as c:
+        assert post(c, "tools/list", token=None).status_code == 200
+    with TestClient(build_app(FakeService(), None, "lan"), base_url=HOST, client=("8.8.8.8", 5000)) as c:
+        assert post(c, "tools/list", token=None).status_code == 403
+
+
+def test_main_no_token_mode_skips_read_token_and_warns(tmp_path, monkeypatch, caplog):
+    from ethtester.mcp import server
+
+    cfg_path = tmp_path / "c.toml"
+    cfg_path.write_text(f'mcp_auth = "none"\nlog_path = "{tmp_path / "e.log"}"\n'
+                        f'activity_path = "{tmp_path / "a.json"}"\n')
+    tokens = []
+
+    class FakeLinkControl:
+        def __init__(self, iface):
+            pass
+
+        def recover(self):
+            pass
+
+        def _restore_quietly(self):
+            pass
+
+    def no_read(path):
+        raise AssertionError("token must not be read")
+
+    monkeypatch.setattr(server, "read_token", no_read)
+    monkeypatch.setattr(server, "LinkControl", FakeLinkControl)
+    monkeypatch.setattr(server, "resolve_bind", lambda cfg: "127.0.0.1")
+    monkeypatch.setattr(server, "build_app", lambda service, token, clients: tokens.append(token))
+    monkeypatch.setattr(server.uvicorn, "run", lambda app, **kw: None)
+    with caplog.at_level("WARNING"):
+        server.main(["--config", str(cfg_path), "--token-file", str(tmp_path / "t")])
+    assert tokens == [None]
+    assert "authentication is disabled" in caplog.text

@@ -44,7 +44,9 @@ The tester runs an MCP server, so Claude Code can read its status and run probes
 2. On the Pi, run `sudo tailscale up` and open the link it prints. Then re-run the installer once more: it prints the `claude mcp add …` command to use.
 3. On your Mac, install Tailscale, sign in to the same account, and run that `claude mcp add` command.
 
-**Home Wi-Fi only (no Tailscale).** Set `mcp_bind = "wlan0"` and `mcp_clients = "lan"` in `/boot/firmware/ethtester.toml`, re-run the installer, and use the `claude mcp add …` command it prints. The token is still required. This only works while your Mac is on the same home network. Give the Pi's Wi-Fi address a DHCP reservation on your router so the URL doesn't change.
+**Home Wi-Fi only (no Tailscale).** Set `mcp_bind = "wlan0"` and `mcp_clients = "lan"` in `/boot/firmware/ethtester.toml`, re-run the installer, and use the `claude mcp add …` command it prints. The token is still required unless you turn it off (see below). This only works while your Mac is on the same home network. Give the Pi's Wi-Fi address a DHCP reservation on your router so the URL doesn't change.
+
+**No token (`mcp_auth = "none"`).** On a trusted home Wi-Fi you can set `mcp_auth = "none"` to drop the token. The server then logs a warning and skips the bearer check; the client-address check (`mcp_clients`) still applies. The risk: anyone on the Wi-Fi network can run probes (ping, traceroute, ARP scans, DHCP renew, link changes) through the tester's Ethernet port. Don't use it on a network you don't fully trust. On the CLI, `ethtester configure --url URL` accepts an empty token, and then no Authorization header is sent.
 
 Tools: `get_status`, `get_history`, `get_link_details`, `ping`, `traceroute`, `dns_lookup`, `http_check`, `dhcp_renew`, `link_control`, `neighbour_scan`, `speed_test`.
 
@@ -56,7 +58,7 @@ Every call is logged to `/var/log/ethtester/probes.log`. To rotate the token, de
 
 ```
 ln -s "$PWD/scripts/ethtester" ~/.local/bin/ethtester
-ethtester configure --url http://192.168.1.190:8765/mcp   # paste the token from the installer when asked
+ethtester configure --url http://192.168.1.190:8765/mcp   # paste the token from the installer when asked (empty if mcp_auth = "none")
 ```
 
 The settings are saved to `~/.config/ethtester/cli.toml` (mode 0600). `ETHTESTER_URL`, `ETHTESTER_TOKEN` and `ETHTESTER_CONFIG` override them, and so do `--url` and `--token`.

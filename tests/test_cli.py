@@ -190,9 +190,50 @@ def test_configure_writes_private_file_and_hides_token(capsys, monkeypatch):
     assert cli.resolve_settings() == (URL, "flag-token")
 
 
-def test_configure_without_token_exits_2(capsys, monkeypatch):
+def test_configure_with_empty_token_saves_url_only(capsys, monkeypatch):
+    path = Path(os.environ["ETHTESTER_CONFIG"])
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
-    assert cli.main(["configure", "--url", URL]) == 2
+    assert cli.main(["configure", "--url", URL]) == 0
+    assert "token" not in path.read_text()
+    assert cli.resolve_settings() == (URL, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    assert cli.main(["configure", "--url", URL]) == 0
+
+
+def test_configure_prompts_on_tty_and_accepts_empty(capsys, monkeypatch):
+    class TtyStdin(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", TtyStdin("\n"))
+    assert cli.main(["configure", "--url", URL]) == 0
+    assert "token (leave empty for none): " in capsys.readouterr().err
+    assert cli.resolve_settings() == (URL, None)
+
+
+def test_configure_does_not_prompt_when_stdin_is_not_a_tty(capsys, monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("piped\n"))
+    assert cli.main(["configure", "--url", URL]) == 0
+    assert "leave empty" not in capsys.readouterr().err
+
+
+def test_configure_without_url_exits_2(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["configure"])
+    assert exc.value.code == 2
+
+
+def test_no_authorization_header_without_token():
+    opener = FakeOpener(tool_result("{}"))
+    cli.call_tool(URL, None, "get_status", {}, 7, opener)
+    assert opener.requests[0].get_header("Authorization") is None
+
+
+def test_status_works_without_token(monkeypatch):
+    monkeypatch.setenv("ETHTESTER_URL", URL)
+    opener = FakeOpener(tool_result("{}"))
+    assert cli.main(["status"], opener=opener) == 0
+    assert opener.requests[0].get_header("Authorization") is None
 
 
 def test_help_mentions_essentials(capsys):

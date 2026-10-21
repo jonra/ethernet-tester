@@ -101,3 +101,17 @@ def test_activity_path_default(tmp_path: Path):
     path = tmp_path / "c.toml"
     path.write_text(f'activity_path = "{tmp_path / "a.json"}"\n')
     assert load_config(path).activity_path == str(tmp_path / "a.json")
+
+
+def test_mcp_auth_default_and_values(tmp_path: Path):
+    assert Config().mcp_auth == "token"
+    path = tmp_path / "ethtester.toml"
+    path.write_text('mcp_auth = "none"\n')
+    assert load_config(path).mcp_auth == "none"
+
+
+def test_invalid_mcp_auth_rejected(tmp_path: Path):
+    path = tmp_path / "ethtester.toml"
+    path.write_text('mcp_auth = "basic"\n')
+    with pytest.raises(ValueError, match="mcp_auth"):
+        load_config(path)

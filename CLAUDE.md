@@ -8,5 +8,5 @@
 - Reachability and path: `ping HOST`, `traceroute HOST`. Name resolution: `dns NAME [-t TYPE] [--server IP]`. Web: `http URL`.
 - Who is on the network: `neighbours`. Throughput: `speedtest SERVER` (needs `iperf3 -s` on SERVER).
 - `renew-dhcp` and `link-control` briefly disturb the tested port. The tester's screen and `history` will show NO DHCP, CABLE? or extra flaps; those are caused by the test. Don't run them back to back.
-- Exit codes: 0 OK, 1 tool error (the probe failed, e.g. no link), 2 connection or config error (check the token with `ethtester configure`).
+- Exit codes: 0 OK, 1 tool error (the probe failed, e.g. no link), 2 connection or config error (check the URL, and the token if the tester uses one, with `ethtester configure`; a tester with `mcp_auth = "none"` needs no token).
 - The dongle is 100 Mbit only, so a 100M link is normal, not a fault.

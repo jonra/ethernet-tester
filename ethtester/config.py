@@ -10,6 +10,7 @@ log = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = Path("/boot/firmware/ethtester.toml")
 DISPLAYS = ("V3", "V4", "png")
 MCP_CLIENTS = ("tailscale", "lan")
+MCP_AUTH_MODES = ("token", "none")
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,8 @@ class Config:
     mcp_bind: str = "tailscale"
     # who may connect: "tailscale" (Tailscale + loopback) or "lan" (also private home-network ranges)
     mcp_clients: str = "tailscale"
+    # "token" (bearer token required) or "none" (no token; home Wi-Fi only, client-address check still applies)
+    mcp_auth: str = "token"
 
 
 # (low, strict): strict means the value must be above low, otherwise at least low.
@@ -80,5 +83,7 @@ def load_config(path: Path) -> Config:
         raise ValueError(f"display must be one of {DISPLAYS}, got {cfg.display!r}")
     if cfg.mcp_clients not in MCP_CLIENTS:
         raise ValueError(f"mcp_clients must be one of {MCP_CLIENTS}, got {cfg.mcp_clients!r}")
+    if cfg.mcp_auth not in MCP_AUTH_MODES:
+        raise ValueError(f"mcp_auth must be one of {MCP_AUTH_MODES}, got {cfg.mcp_auth!r}")
     _check_range(cfg)
     return cfg

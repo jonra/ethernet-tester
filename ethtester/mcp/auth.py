@@ -40,14 +40,15 @@ def read_token(path: Path) -> str:
 
 class BearerAuth:
     """Passes lifespan through, drops other non-HTTP scopes, rejects HTTP requests from outside
-    the allowed networks (403; Tailscale/loopback, plus private LAN ranges in "lan" mode), and any whose Authorization header isn't exactly 'Bearer <token>' (401)."""
+    the allowed networks (403; Tailscale/loopback, plus private LAN ranges in "lan" mode), and any whose Authorization header isn't exactly 'Bearer <token>' (401).
+    With token=None the bearer check is skipped; the client-address check stays."""
 
-    def __init__(self, app, token: str, clients: str = "tailscale"):
+    def __init__(self, app, token: str | None, clients: str = "tailscale"):
         if clients not in CLIENT_MODES:
             raise ValueError(f"clients must be one of {CLIENT_MODES}, got {clients!r}")
         self.app = app
         self.clients = clients
-        self.expected = f"Bearer {token}".encode()
+        self.expected = None if token is None else f"Bearer {token}".encode()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
@@ -57,7 +58,7 @@ class BearerAuth:
                 await send({"type": "http.response.body", "body": b'{"error": "forbidden"}'})
                 return
             supplied = dict(scope.get("headers") or []).get(b"authorization", b"")
-            if not hmac.compare_digest(supplied, self.expected):
+            if self.expected is not None and not hmac.compare_digest(supplied, self.expected):
                 await send({"type": "http.response.start", "status": 401,
                             "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"error": "unauthorized"}'})
