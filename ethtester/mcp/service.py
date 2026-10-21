@@ -11,6 +11,8 @@ from ..checks.command import run_command
 from ..checks.dhcp import check_dhcp
 from ..checks.link import check_link
 from ..config import Config
+from ..results import (DhcpResult, DnsResult, GatewayResult, InternetResult, LinkResult, LldpResult,
+                       Snapshot)
 from . import dnsq, probes, validate
 
 log = logging.getLogger(__name__)
@@ -22,8 +24,36 @@ UNREADABLE_STATUS = "status file is unreadable; check the ethtester service"
 FORCE_SPEEDS = {"force_10": 10, "force_100": 100}
 
 
+NESTED = {"link": LinkResult, "lldp": LldpResult, "dhcp": DhcpResult, "gateway": GatewayResult,
+          "dns": DnsResult, "internet": InternetResult}
+
+
 class ProbeError(Exception):
     pass
+
+
+def snapshot_from_dict(data: dict) -> Snapshot:
+    """Rebuilds a Snapshot from its asdict()/JSON form; raises on anything that doesn't fit."""
+    fields = dict(data)
+    for key, cls in NESTED.items():
+        value = fields.get(key)
+        if value is not None:
+            if cls is DhcpResult and "dns_servers" in value:
+                value = {**value, "dns_servers": tuple(value["dns_servers"])}  # JSON gave a list
+            fields[key] = cls(**value)
+    return Snapshot(**fields)
+
+
+def _screen_rows(data: dict) -> list | None:
+    """The tester's screen rows rebuilt from the state file, or None if they can't be."""
+    try:
+        from ..render import build_rows
+        from ..verdict import Verdict
+        rows = build_rows(snapshot_from_dict(data["snapshot"]), Verdict(code=data["verdict"], text=data["text"]))
+        return [{"label": r.label, "status": r.status, "text": r.text} for r in rows]
+    except Exception:
+        log.debug("could not rebuild screen rows", exc_info=True)
+        return None
 
 
 def _summarise(entry: dict) -> dict:
@@ -86,7 +116,7 @@ class ProbeService:
             if not isinstance(epoch, (int, float)) or isinstance(epoch, bool):
                 raise ProbeError(UNREADABLE_STATUS)
             age = self.wall() - epoch
-            return {**data, "age_s": round(age, 1), "stale": age > STALE_S}
+            return {**data, "rows": _screen_rows(data), "age_s": round(age, 1), "stale": age > STALE_S}
         return self._logged("get_status", {}, body)
 
     def get_history(self, limit: int = 50, since: str | None = None) -> dict:

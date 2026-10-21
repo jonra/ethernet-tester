@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -6,8 +7,9 @@ import pytest
 from ethtester.config import Config
 from ethtester.mcp.linkctl import Busy, LinkControl
 from ethtester.mcp.probelog import ProbeLog
-from ethtester.mcp.service import ProbeError, ProbeService
-from ethtester.results import DhcpResult, LinkResult
+from ethtester.mcp.service import ProbeError, ProbeService, snapshot_from_dict
+from ethtester.render import build_rows
+from ethtester.results import DhcpResult, LinkResult, Snapshot
 from ethtester.statefile import write_state
 from ethtester.verdict import evaluate
 from tests.factories import ok_snapshot
@@ -62,6 +64,33 @@ def test_get_status_fresh_and_stale(tmp_path):
     assert status["verdict"] == "OK" and status["age_s"] == 10.0 and status["stale"] is False
     write_state(tmp_path / "state.json", s, evaluate(s, 1000, 20), 900.0)
     assert service.get_status()["stale"] is True
+
+
+def test_snapshot_from_dict_round_trips_through_json():
+    s = ok_snapshot()
+    assert snapshot_from_dict(json.loads(json.dumps(asdict(s)))) == s
+    bare = Snapshot(link=LinkResult(up=False))
+    assert snapshot_from_dict(json.loads(json.dumps(asdict(bare)))) == bare
+
+
+def test_get_status_includes_screen_rows(tmp_path):
+    service, *_ = make(tmp_path)
+    s = ok_snapshot()
+    v = evaluate(s, 1000, 20)
+    write_state(tmp_path / "state.json", s, v, 990.0)
+    rows = service.get_status()["rows"]
+    assert rows == [asdict(r) for r in build_rows(s, v)]
+    assert [r["label"] for r in rows] == ["LINK", "PORT", "IP", "GW", "DNS", "NET"]
+    assert set(rows[0]) == {"label", "status", "text"}
+
+
+@pytest.mark.parametrize("snapshot", [None, {}, {"link": "up"}, {"link": {"up": True, "bogus": 1}}])
+def test_get_status_rows_none_when_snapshot_is_odd(tmp_path, snapshot):
+    service, *_ = make(tmp_path)
+    data = {"epoch": 990.0, "verdict": "OK", "text": "OK", "snapshot": snapshot}
+    (tmp_path / "state.json").write_text(json.dumps(data))
+    status = service.get_status()
+    assert status["rows"] is None and status["verdict"] == "OK"
 
 
 def test_get_status_missing(tmp_path):
