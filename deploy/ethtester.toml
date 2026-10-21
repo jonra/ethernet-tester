@@ -7,3 +7,5 @@ dhcp_timeout   = 20           # seconds before "NO DHCP"
 ping_count     = 3
 dns_test_name  = "example.com"
 internet_url   = "https://1.1.1.1/cdn-cgi/trace"
+mcp_port       = 8765         # MCP server port (Tailscale only)
+mcp_bind       = "tailscale"  # "tailscale" or an explicit IPv4 address

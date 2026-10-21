@@ -35,3 +35,15 @@ python3 -m venv .venv && .venv/bin/pip install pillow pytest
 ```
 
 Sample screens are written to `tests/output/`.
+
+## Remote probes (MCP)
+
+The tester runs an MCP server, so Claude Code can read its status and run probes through the Ethernet port from anywhere. It's reachable only over Tailscale and needs a token.
+
+1. Re-run the installer (`sudo ethernet-tester/deploy/install.sh`). It installs Tailscale and creates the token.
+2. On the Pi, run `sudo tailscale up` and open the link it prints. Then re-run the installer once more: it prints the `claude mcp add …` command to use.
+3. On your Mac, install Tailscale, sign in to the same account, and run that `claude mcp add` command.
+
+Tools: `get_status`, `get_history`, `get_link_details`, `ping`, `traceroute`, `dns_lookup`, `http_check`, `dhcp_renew`, `link_control`, `neighbour_scan`, `speed_test`.
+
+Every call is logged to `/var/log/ethtester/probes.log`. To rotate the token, delete `/etc/ethtester/mcp-token` and re-run the installer.

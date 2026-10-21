@@ -1,0 +1,13 @@
+[Unit]
+Description=ethtester MCP server (remote probes over Tailscale)
+After=tailscaled.service ethtester.service
+Wants=tailscaled.service
+
+[Service]
+WorkingDirectory=/opt/ethtester
+ExecStart=/opt/ethtester/venv/bin/python -m ethtester.mcp --config /boot/firmware/ethtester.toml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
