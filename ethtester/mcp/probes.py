@@ -90,7 +90,11 @@ def parse_curl(raw: str) -> dict:
     expires = None
     for line in raw.splitlines():
         if line.startswith(JSON_MARK):
-            data = json.loads(line[len(JSON_MARK):])
+            try:
+                parsed = json.loads(line[len(JSON_MARK):])
+            except ValueError:
+                parsed = None
+            data = parsed if isinstance(parsed, dict) else {}
         else:
             m = EXPIRE_RE.search(line)
             if m:
@@ -101,7 +105,7 @@ def parse_curl(raw: str) -> dict:
         return round(value * 1000, 1) if isinstance(value, (int, float)) else None
 
     return {
-        "ok": data.get("exitcode", 1) == 0,
+        "ok": data.get("exitcode", 1) == 0 and not data.get("errormsg"),
         "status": data.get("http_code") or None,
         "error": data.get("errormsg") or (None if data else "no result from curl"),
         "remote_ip": data.get("remote_ip") or None,
@@ -112,23 +116,39 @@ def parse_curl(raw: str) -> dict:
 
 
 def http_check(interface: str, url: str, run=run_command) -> dict:
-    cmd = ["curl", "--interface", interface, "-sS", "-v", "--stderr", "-", "-o", "/dev/null",
+    cmd = ["curl", "--interface", interface, "-sS", "-g", "-v", "--stderr", "-", "-o", "/dev/null",
            "-m", "15", "-w", "\n" + JSON_MARK + "%{json}\n", url]
     return {"url": url, **parse_curl(run(cmd, timeout=20, check=False))}
 
 
 def dhcp_renew(interface: str, run=run_command, clock=time.monotonic, sleep=time.sleep,
                timeout: float = 30.0) -> dict:
-    """Drops the lease and reconnects; the main tester briefly shows the port without an address."""
+    """Drops the lease and reconnects; the main tester briefly shows the port without an address.
+
+    Once the disconnect has been issued the connect always runs, so the port is never left down."""
+    show = ["nmcli", "-t", "-f", "IP4,DHCP4", "device", "show", interface]
+    connect = ["nmcli", "--wait", "0", "device", "connect", interface]
     run(["nmcli", "--wait", "10", "device", "disconnect", interface], timeout=15, check=False)
-    started = clock()
-    run(["nmcli", "--wait", "0", "device", "connect", interface], check=False)
+    dropped = False
+    try:
+        for _ in range(10):
+            if not parse_nmcli(run(show, check=False)).ip:
+                dropped = True
+                break
+            sleep(0.5)
+    finally:
+        started = clock()
+        run(connect, check=False)
+    if not dropped:
+        return {"ok": False, "seconds_to_ip": None, "error": "could not drop the old lease"}
     while clock() - started < timeout:
-        lease = parse_nmcli(run(["nmcli", "-t", "-f", "IP4,DHCP4", "device", "show", interface], check=False))
+        lease = parse_nmcli(run(show, check=False))
         if lease.ip:
             return {"ok": True, "seconds_to_ip": round(clock() - started, 1), **asdict(lease)}
         sleep(0.5)
-    return {"ok": False, "seconds_to_ip": None, "error": f"no DHCP lease within {timeout:.0f} s"}
+    detail = (run(connect, check=False) or "").strip()
+    error = f"no DHCP lease within {timeout:.0f} s"
+    return {"ok": False, "seconds_to_ip": None, "error": f"{error}: {detail}" if detail else error}
 
 
 def parse_arp_scan(raw: str) -> list:
@@ -150,14 +170,16 @@ def parse_iperf(raw: str) -> dict:
         data = json.loads(raw)
     except ValueError:
         return {"ok": False, "error": "iperf3 gave no JSON output"}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "unexpected iperf3 output"}
     if data.get("error"):
         return {"ok": False, "error": data["error"]}
-    end = data.get("end", {})
-    bps = end.get("sum_received", {}).get("bits_per_second")
+    end = data.get("end") or {}
+    bps = (end.get("sum_received") or {}).get("bits_per_second")
     return {"ok": bps is not None, "mbps": round(bps / 1e6, 1) if bps is not None else None,
-            "retransmits": end.get("sum_sent", {}).get("retransmits")}
+            "retransmits": (end.get("sum_sent") or {}).get("retransmits")}
 
 
 def speed_test(interface: str, server: str, seconds: int, reverse: bool, run=run_command) -> dict:
-    cmd = ["iperf3", "-c", server, "--bind-dev", interface, "-t", str(seconds), "-J"] + (["-R"] if reverse else [])
+    cmd = ["iperf3", "-c", server, "--bind-dev", interface, "-t", str(seconds), "-J", "--connect-timeout", "5000"] + (["-R"] if reverse else [])
     return {"server": server, "reverse": reverse, **parse_iperf(run(cmd, timeout=seconds + 20, check=False))}

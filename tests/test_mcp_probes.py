@@ -1,5 +1,8 @@
 import json
 
+import pytest
+
+from ethtester.checks.command import CheckError
 from ethtester.mcp import probes
 
 PING = """PING 192.168.1.1 (192.168.1.1) from 192.168.1.222 eth0: 56(84) bytes of data.
@@ -102,7 +105,7 @@ def test_http_check():
     assert result["ms"] == {"dns": 1.0, "connect": 12.0, "tls": 45.0, "first_byte": 80.0, "total": 81.0}
     assert result["cert_expires"] == "Jan 15 12:00:00 2027 GMT"
     cmd = run.calls[0][0]
-    assert cmd[:3] == ["curl", "--interface", "eth0"] and cmd[-1] == "https://1.1.1.1/"
+    assert cmd[:5] == ["curl", "--interface", "eth0", "-sS", "-g"] and cmd[-1] == "https://1.1.1.1/"
 
 
 def test_http_check_failure():
@@ -112,20 +115,93 @@ def test_http_check_failure():
     assert probes.parse_curl("")["ok"] is False
 
 
+def test_parse_curl_never_raises():
+    for raw in ["ETHTESTER_JSON {not json", "ETHTESTER_JSON [1, 2]", "ETHTESTER_JSON 7", "ETHTESTER_JSON "]:
+        result = probes.parse_curl(raw)
+        assert result["ok"] is False and result["error"] == "no result from curl"
+    result = probes.parse_curl('ETHTESTER_JSON {"http_code":200,"exitcode":0,"errormsg":"late failure"}')
+    assert result["ok"] is False and result["error"] == "late failure"
+    assert probes.parse_curl('ETHTESTER_JSON {"http_code":503,"exitcode":0,"errormsg":null}')["ok"] is True
+
+
+LEASE = "IP4.ADDRESS[1]:192.168.1.222/24\nIP4.GATEWAY:192.168.1.1\n"
+DISCONNECT = ["nmcli", "--wait", "10", "device", "disconnect", "eth0"]
+CONNECT = ["nmcli", "--wait", "0", "device", "connect", "eth0"]
+SHOW = ["nmcli", "-t", "-f", "IP4,DHCP4", "device", "show", "eth0"]
+
+
+def stepping_clock(step):
+    now = [-step]
+
+    def clock():
+        now[0] += step
+        return now[0]
+    return clock
+
+
 def test_dhcp_renew():
-    lease = "IP4.ADDRESS[1]:192.168.1.222/24\nIP4.GATEWAY:192.168.1.1\n"
-    run = Recorder("", "", "", lease)
-    times = iter([0.0, 0.0, 1.0, 2.5, 2.5])
+    # disconnect, drop poll (no IP), connect, poll (none yet), poll (lease)
+    run = Recorder("", "", "", "", LEASE)
+    times = iter([0.0, 0.0, 1.0, 2.5])
     result = probes.dhcp_renew("eth0", run=run, clock=lambda: next(times), sleep=lambda s: None)
     assert result["ok"] is True and result["ip"] == "192.168.1.222" and result["seconds_to_ip"] == 2.5
-    assert run.calls[0][0] == ["nmcli", "--wait", "10", "device", "disconnect", "eth0"]
-    assert run.calls[1][0] == ["nmcli", "--wait", "0", "device", "connect", "eth0"]
+    assert [c[0] for c in run.calls] == [DISCONNECT, SHOW, CONNECT, SHOW, SHOW]
 
 
 def test_dhcp_renew_timeout():
-    times = iter([0.0, 0.0, 31.0])
-    result = probes.dhcp_renew("eth0", run=Recorder(), clock=lambda: next(times), sleep=lambda s: None)
-    assert result["ok"] is False and "30" in result["error"]
+    # disconnect, drop poll, connect, two empty polls (clock 10/20 after started=0), reconnect output
+    run = Recorder("", "", "", "", "", "  Error: no carrier \n")
+    result = probes.dhcp_renew("eth0", run=run, clock=stepping_clock(10.0), sleep=lambda s: None)
+    assert result["ok"] is False and result["seconds_to_ip"] is None
+    assert "30" in result["error"] and "Error: no carrier" in result["error"]
+    assert not result["error"].endswith(" ")
+    assert [c[0] for c in run.calls].count(CONNECT) == 2
+    assert run.calls[-1][0] == CONNECT
+
+
+def test_dhcp_renew_timeout_quiet_reconnect():
+    run = Recorder()
+    result = probes.dhcp_renew("eth0", run=run, clock=stepping_clock(10.0), sleep=lambda s: None)
+    assert result["ok"] is False and result["error"] == "no DHCP lease within 30 s"
+
+
+def test_dhcp_renew_old_lease_never_drops():
+    run = Recorder("", *[LEASE] * 10, "")
+    sleeps = []
+    result = probes.dhcp_renew("eth0", run=run, clock=stepping_clock(1.0), sleep=sleeps.append)
+    assert result == {"ok": False, "seconds_to_ip": None, "error": "could not drop the old lease"}
+    cmds = [c[0] for c in run.calls]
+    assert cmds[0] == DISCONNECT and cmds.count(SHOW) == 10
+    assert cmds[-1] == CONNECT
+    assert len(sleeps) <= 10
+
+
+def test_dhcp_renew_status_poll_raises_after_connect():
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == SHOW and CONNECT in calls:
+            raise CheckError("nmcli: boom")
+        return ""
+
+    with pytest.raises(CheckError):
+        probes.dhcp_renew("eth0", run=run, clock=stepping_clock(1.0), sleep=lambda s: None)
+    assert CONNECT in calls
+
+
+def test_dhcp_renew_drop_poll_raises_still_connects():
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == SHOW:
+            raise CheckError("nmcli: boom")
+        return ""
+
+    with pytest.raises(CheckError):
+        probes.dhcp_renew("eth0", run=run, clock=stepping_clock(1.0), sleep=lambda s: None)
+    assert calls[-1] == CONNECT
 
 
 def test_neighbour_scan():
@@ -140,6 +216,14 @@ def test_speed_test():
     run = Recorder(IPERF)
     result = probes.speed_test("eth0", "mac.lan", 10, True, run=run)
     assert result == {"server": "mac.lan", "reverse": True, "ok": True, "mbps": 93.4, "retransmits": 4}
-    assert run.calls[0][0] == ["iperf3", "-c", "mac.lan", "--bind-dev", "eth0", "-t", "10", "-J", "-R"]
+    assert run.calls[0][0] == ["iperf3", "-c", "mac.lan", "--bind-dev", "eth0", "-t", "10", "-J", "--connect-timeout", "5000", "-R"]
     assert probes.parse_iperf('{"error": "unable to connect"}') == {"ok": False, "error": "unable to connect"}
     assert probes.parse_iperf("garbage")["ok"] is False
+
+
+def test_parse_iperf_never_raises():
+    assert probes.parse_iperf("[1, 2]") == {"ok": False, "error": "unexpected iperf3 output"}
+    assert probes.parse_iperf("null") == {"ok": False, "error": "unexpected iperf3 output"}
+    for raw in ['{"end": null}', '{"end": {"sum_received": null, "sum_sent": null}}']:
+        result = probes.parse_iperf(raw)
+        assert result["ok"] is False and result["mbps"] is None and result["retransmits"] is None
