@@ -6,6 +6,7 @@ dependencies = ["pillow"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+mcp = ["mcp>=1.13,<2", "uvicorn>=0.30"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

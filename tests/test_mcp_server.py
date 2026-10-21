@@ -1,0 +1,84 @@
+import json
+from pathlib import Path
+
+import pytest
+from starlette.testclient import TestClient
+
+from ethtester.config import Config
+from ethtester.mcp.auth import read_token
+from ethtester.mcp.server import build_app, resolve_bind
+from ethtester.mcp.service import ProbeError
+
+TOKEN = "s3cret-token"
+HOST = "http://eth.tail1234.ts.net:8765"
+EXPECTED_TOOLS = {"get_status", "get_history", "get_link_details", "ping", "traceroute", "dns_lookup",
+                  "http_check", "dhcp_renew", "link_control", "neighbour_scan", "speed_test"}
+
+
+class FakeService:
+    def get_status(self):
+        return {"verdict": "OK", "stale": False}
+
+    def ping(self, host, count=5, size=56):
+        if host == "unplugged":
+            raise ProbeError("eth0 has no link; plug in a cable first")
+        return {"host": host, "count": count}
+
+
+def post(client, method, params=None, token=TOKEN):
+    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    return client.post("/mcp", headers=headers,
+                       json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+
+
+@pytest.fixture
+def client():
+    with TestClient(build_app(FakeService(), TOKEN), base_url=HOST) as c:
+        yield c
+
+
+def test_rejects_missing_or_wrong_token(client):
+    assert post(client, "tools/list", token=None).status_code == 401
+    assert post(client, "tools/list", token="wrong").status_code == 401
+
+
+def test_lists_all_tools(client):
+    response = post(client, "tools/list")
+    assert response.status_code == 200
+    assert {t["name"] for t in response.json()["result"]["tools"]} == EXPECTED_TOOLS
+
+
+def test_calls_tool(client):
+    result = post(client, "tools/call", {"name": "get_status", "arguments": {}}).json()["result"]
+    assert result["isError"] is False
+    assert json.loads(result["content"][0]["text"])["verdict"] == "OK"
+    result = post(client, "tools/call", {"name": "ping", "arguments": {"host": "1.1.1.1", "count": 3}}).json()["result"]
+    assert json.loads(result["content"][0]["text"]) == {"host": "1.1.1.1", "count": 3}
+
+
+def test_tool_error_is_reported(client):
+    result = post(client, "tools/call", {"name": "ping", "arguments": {"host": "unplugged"}}).json()["result"]
+    assert result["isError"] is True
+    assert "no link" in result["content"][0]["text"]
+
+
+def test_read_token(tmp_path: Path):
+    path = tmp_path / "token"
+    path.write_text("abc123\n")
+    assert read_token(path) == "abc123"
+    path.write_text("\n")
+    with pytest.raises(SystemExit):
+        read_token(path)
+    with pytest.raises(SystemExit):
+        read_token(tmp_path / "missing")
+
+
+def test_resolve_bind():
+    assert resolve_bind(Config(mcp_bind="100.64.0.7")) == "100.64.0.7"
+    assert resolve_bind(Config(), run=lambda cmd, **kw: "100.101.102.103\n") == "100.101.102.103"
+    with pytest.raises(SystemExit, match="tailscale up"):
+        resolve_bind(Config(), run=lambda cmd, **kw: "")
+    with pytest.raises(ValueError):
+        resolve_bind(Config(mcp_bind="0.0.0.0x"))
