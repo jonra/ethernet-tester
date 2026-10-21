@@ -54,6 +54,8 @@ def _rdata(data: bytes, rtype: int, start: int, length: int) -> str:
     if rtype in (2, 5):
         return read_name(data, start)[0]
     if rtype == 15:
+        if length < 3:
+            raise ValueError("short MX record")
         preference = struct.unpack(">H", raw[:2])[0]
         return f"{preference} {read_name(data, start + 2)[0]}"
     if rtype == 16:
@@ -83,6 +85,8 @@ def parse_answer(data: bytes, qid: int) -> dict:
             raise ValueError("truncated DNS record")
         rtype, _cls, ttl, length = struct.unpack(">HHIH", data[offset:offset + 10])
         offset += 10
+        if offset + length > len(data):
+            raise ValueError("truncated DNS record data")
         records.append({"name": name, "type": TYPE_NAMES.get(rtype, str(rtype)), "ttl": ttl,
                         "data": _rdata(data, rtype, offset, length)})
         offset += length

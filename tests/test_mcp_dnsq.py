@@ -53,3 +53,11 @@ def test_rejects_wrong_id_short_and_loops():
         parse_answer(b"\x00\x01", 1)
     with pytest.raises(ValueError):
         read_name(b"\xc0\x00", 0)
+
+
+def test_rejects_truncated_rdata():
+    with pytest.raises(ValueError):
+        parse_answer(response(6, 0x8180, 15, [(15, 60, b"\x00")]), 6)
+    data = response(5, 0x8180, 1, [(1, 300, bytes([1, 2, 3, 4]))])
+    with pytest.raises(ValueError):
+        parse_answer(data[:-2], 5)
