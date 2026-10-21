@@ -138,3 +138,39 @@ def test_speed_test_validates(tmp_path):
     assert run.calls[-1][:2] == ["iperf3", "-c"]
     with pytest.raises(ValueError):
         service.speed_test("mac.lan", reverse="yes")
+
+
+@pytest.mark.parametrize("content", ["{", "[1, 2]", '{"epoch": "abc"}', '{"epoch": true}'])
+def test_get_status_corrupt_state(tmp_path, content):
+    service, *_ = make(tmp_path)
+    (tmp_path / "state.json").write_text(content)
+    with pytest.raises(ProbeError, match="unreadable"):
+        service.get_status()
+
+
+def test_neighbour_scan_refuses_unknown_prefix(tmp_path):
+    service, *_ = make(tmp_path, lease=DhcpResult(ip="10.1.2.3", prefix=None))
+    with pytest.raises(ProbeError, match="unknown"):
+        service.neighbour_scan()
+
+
+def test_neighbour_scan_accepts_slash_22(tmp_path):
+    service, run, *_ = make(tmp_path, lease=DhcpResult(ip="10.1.2.3", prefix=22))
+    service.neighbour_scan()
+    assert any(c[0] == "arp-scan" for c in run.calls)
+
+
+def test_dns_lookup_requires_link_before_dhcp(tmp_path):
+    service, _, dns_calls, _ = make(tmp_path, up=False, lease=DhcpResult(ip="192.168.1.5", prefix=24))
+    with pytest.raises(ProbeError, match="no link"):
+        service.dns_lookup("example.com")
+    assert dns_calls == []
+
+
+def test_get_history_skips_odd_lines(tmp_path):
+    service, *_ = make(tmp_path)
+    good = {"ts": "2026-10-21T09:40:00", "verdict": "OK", "text": "OK", "snapshot": {}}
+    lines = ["[1,2]", '{"verdict":"OK"}', '{"ts":"garbage"}', '{"ts":5}', json.dumps(good)]
+    (tmp_path / "ethtester.log").write_text("\n".join(lines) + "\n")
+    assert [e["ts"] for e in service.get_history()["entries"]] == ["2026-10-21T09:40:00"]
+    assert len(service.get_history(since="2026-10-21T09:00:00")["entries"]) == 1

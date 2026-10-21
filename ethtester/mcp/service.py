@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 STALE_S = 30
 LINK_SETTLE_S = 3.0
 MAX_SCAN_PREFIX = 22
+UNREADABLE_STATUS = "status file is unreadable; check the ethtester service"
 FORCE_SPEEDS = {"force_10": 10, "force_100": 100}
 
 
@@ -79,7 +80,12 @@ class ProbeService:
                 data = json.loads(Path(self.cfg.state_path).read_text())
             except FileNotFoundError:
                 raise ProbeError("no status yet; is the ethtester service running?") from None
-            age = self.wall() - data.get("epoch", 0)
+            except (OSError, ValueError):
+                raise ProbeError(UNREADABLE_STATUS) from None
+            epoch = data.get("epoch", 0) if isinstance(data, dict) else None
+            if not isinstance(epoch, (int, float)) or isinstance(epoch, bool):
+                raise ProbeError(UNREADABLE_STATUS)
+            age = self.wall() - epoch
             return {**data, "age_s": round(age, 1), "stale": age > STALE_S}
         return self._logged("get_status", {}, body)
 
@@ -99,7 +105,13 @@ class ProbeService:
                         entry = json.loads(line)
                     except ValueError:
                         continue
-                    if start is not None and datetime.fromisoformat(entry["ts"]) < start:
+                    if not isinstance(entry, dict):
+                        continue
+                    try:
+                        when = datetime.fromisoformat(entry["ts"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if start is not None and when < start:
                         continue
                     rows.append(_summarise(entry))
             return {"entries": rows[-count:]}
@@ -141,6 +153,7 @@ class ProbeService:
         def body():
             target = validate.host(name)
             qtype = validate.record_type(record_type)
+            self._require_link()
             if server is not None:
                 resolver = validate.ipv4(server)
             else:
@@ -149,7 +162,6 @@ class ProbeService:
                 if not candidates:
                     raise ProbeError("no DNS server from DHCP; pass server explicitly")
                 resolver = candidates[0]
-            self._require_link()
             try:
                 return self.dns(resolver, target, qtype, self.iface)
             except OSError as exc:
@@ -192,7 +204,9 @@ class ProbeService:
                 lease = self.dhcp(self.iface)
                 if not lease.ip:
                     raise ProbeError(f"{self.iface} has no IPv4 address to scan from")
-                if lease.prefix is not None and lease.prefix < MAX_SCAN_PREFIX:
+                if lease.prefix is None:
+                    raise ProbeError("subnet size is unknown; refusing to scan")
+                if lease.prefix < MAX_SCAN_PREFIX:
                     raise ProbeError(f"subnet /{lease.prefix} is too large to scan; limit is /{MAX_SCAN_PREFIX}")
                 return probes.neighbour_scan(self.iface, run=self.run)
         return self._logged("neighbour_scan", {}, body)
