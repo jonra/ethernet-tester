@@ -154,3 +154,108 @@ def test_run_writes_state_and_survives_state_failure(tmp_path):
          _StateLogger(tmp_path / "b.log"), sleep=lambda d: None, wall=lambda: 1.0, ticks=1,
          notify=lambda m: None, write_state=failing)
     assert png.exists()
+
+
+import time as _time  # noqa: E402
+
+from ethtester import main as main_mod  # noqa: E402
+from ethtester.render import build_rows, render, render_probe  # noqa: E402
+from ethtester.screens import ScreenSelector  # noqa: E402
+from ethtester.verdict import evaluate  # noqa: E402
+
+ACT = {"id": "1", "tool": "ping", "target": "1.1.1.1", "state": "running", "started": 1000.0,
+       "finished": None, "settle_until": None, "summary": [], "calls": 1}
+ACT_DONE = {**ACT, "state": "ok", "finished": 1001.0, "settle_until": 1001.0, "summary": ["sent 1"]}
+
+
+class RecordingDisplay:
+    def __init__(self):
+        self.shown = []
+
+    def update(self, image, code):
+        self.shown.append((image.tobytes(), code))
+        return True
+
+
+class Clock:
+    def __init__(self, *times):
+        self.times = list(times)
+
+    def __call__(self):
+        return self.times.pop(0)
+
+
+def run_screens(snapshots, activities, times, read=None, selector=None):
+    cfg = Config(display="png", interval=5)
+    display, delays = RecordingDisplay(), []
+    acts = list(activities)
+    run(cfg, ScriptedCollector(*snapshots), display, FailingStateLog(), sleep=delays.append,
+        wall=Clock(*times), ticks=len(snapshots), notify=lambda m: None,
+        read_activity=read or (lambda: acts.pop(0)), selector=selector or ScreenSelector())
+    return display.shown, delays
+
+
+def clock_at(now):
+    return _time.strftime("%H:%M", _time.localtime(now))
+
+
+def ethernet_image(snapshot, now):
+    v = evaluate(snapshot, 1000, 20)
+    return render(build_rows(snapshot, v), v, clock_at(now)).tobytes()
+
+
+def test_run_shows_probe_screen_fast_while_running_then_holds_then_returns():
+    ok, down = ok_snapshot(), Snapshot(link=LinkResult(up=False))
+    shown, delays = run_screens([ok, ok, ok, down],
+                                [ACT, ACT_DONE, ACT_DONE, ACT_DONE],
+                                [1000.5, 1002.0, 1010.0, 1020.0])
+    assert shown[0] == (render_probe(ACT, clock_at(1000.5)).tobytes(), "PROBE:running")
+    assert shown[1] == (render_probe(ACT_DONE, clock_at(1002.0)).tobytes(), "PROBE:ok")
+    assert shown[2][1] == "PROBE:ok"
+    assert shown[3] == (ethernet_image(down, 1020.0), "NO_LINK")   # verdict changed: Ethernet again
+    assert delays == [FAST_INTERVAL, 5, 5, FAST_INTERVAL]
+
+
+def test_run_without_activity_shows_ethernet():
+    ok = ok_snapshot()
+    shown, delays = run_screens([ok], [None], [1000.0])
+    assert shown == [(ethernet_image(ok, 1000.0), "OK")]
+    assert delays == [5]
+
+
+def test_run_survives_activity_read_selector_and_render_failures():
+    ok = ok_snapshot()
+
+    def broken_read():
+        raise OSError("gone")
+
+    shown, delays = run_screens([ok], [], [1000.0], read=broken_read)
+    assert shown == [(ethernet_image(ok, 1000.0), "OK")] and delays == [5]
+
+    class BrokenSelector:
+        def choose(self, *a):
+            raise RuntimeError("bug")
+
+        def fast(self, a):
+            raise RuntimeError("bug")
+
+    shown, delays = run_screens([ok], [ACT], [1000.0], selector=BrokenSelector())
+    assert shown == [(ethernet_image(ok, 1000.0), "OK")] and delays == [5]
+
+    odd = {k: v for k, v in ACT_DONE.items() if k != "tool"}   # render_probe raises KeyError
+    shown, delays = run_screens([ok], [odd], [1001.5])
+    assert shown == [(ethernet_image(ok, 1001.5), "OK")] and delays == [5]
+
+
+def test_main_wires_activity_reader_and_selector(tmp_path, monkeypatch):
+    cfg = Config(display="png", png_path=str(tmp_path / "s.png"), log_path=str(tmp_path / "e.log"),
+                 state_path=str(tmp_path / "state.json"), activity_path=str(tmp_path / "a.json"))
+    captured = {}
+    monkeypatch.setattr(main_mod, "start", lambda path: (cfg, "display"))
+    monkeypatch.setattr(main_mod, "run", lambda *a, **kw: captured.update(kw))
+    main_mod.main(["--config", str(tmp_path / "c.toml")])
+    assert isinstance(captured["selector"], ScreenSelector)
+    assert captured["read_activity"]() is None
+    from ethtester.activity import write_activity
+    write_activity(tmp_path / "a.json", ACT)
+    assert captured["read_activity"]() == ACT

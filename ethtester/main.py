@@ -7,10 +7,12 @@ import time
 from pathlib import Path
 
 from . import __version__, watchdog
+from .activity import read_activity as read_activity_file
 from .collector import Collector
 from .config import DEFAULT_CONFIG_PATH, Config, load_config
 from .display import Display, PngBackend, make_backend
-from .render import build_rows, render, render_message
+from .render import build_rows, render, render_message, render_probe
+from .screens import ScreenSelector
 from .statefile import write_state as write_state_file
 from .statelog import StateLogger
 from .verdict import evaluate
@@ -24,7 +26,8 @@ CONFIG_ERROR_S = 15
 
 def run(cfg: Config, collector, display: Display, statelog: StateLogger,
         sleep=time.sleep, wall=time.time, ticks: int | None = None,
-        notify=watchdog.notify, write_state=None) -> None:
+        notify=watchdog.notify, write_state=None, read_activity=None,
+        selector: ScreenSelector | None = None) -> None:
     done = 0
     while ticks is None or done < ticks:
         done += 1
@@ -44,11 +47,32 @@ def run(cfg: Config, collector, display: Display, statelog: StateLogger,
                 except Exception:
                     log.exception("state file write failed")
             clock_text = time.strftime("%H:%M", time.localtime(now))
-            display.update(render(build_rows(snapshot, verdict), verdict, clock_text), verdict.code)
+            probe = _probe_screen(read_activity, selector, verdict.code, now, clock_text)
+            if probe is not None:
+                image, code, fast = probe
+                if fast:
+                    delay = FAST_INTERVAL
+                display.update(image, code)
+            else:
+                display.update(render(build_rows(snapshot, verdict), verdict, clock_text), verdict.code)
         except Exception:
             log.exception("tick failed")
         notify("WATCHDOG=1")
         sleep(delay)
+
+
+def _probe_screen(read_activity, selector, verdict_code: str, now: float, clock_text: str):
+    """(image, display code, fast) when the probe screen should show, else None; never raises."""
+    if read_activity is None or selector is None:
+        return None
+    try:
+        activity = read_activity()
+        if selector.choose(activity, verdict_code, now) != "probe":
+            return None
+        return render_probe(activity, clock_text), f"PROBE:{activity['state']}", selector.fast(activity)
+    except Exception:
+        log.exception("probe screen failed")
+        return None
 
 
 def start(cfg_path: Path, sleep=time.sleep, backend_factory=make_backend) -> tuple[Config, Display]:
@@ -89,4 +113,6 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg, display = start(args.config)
     run(cfg, Collector(cfg), display, StateLogger(Path(cfg.log_path)),
-        write_state=functools.partial(write_state_file, Path(cfg.state_path)))
+        write_state=functools.partial(write_state_file, Path(cfg.state_path)),
+        read_activity=functools.partial(read_activity_file, Path(cfg.activity_path)),
+        selector=ScreenSelector())
