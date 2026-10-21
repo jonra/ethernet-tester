@@ -16,7 +16,7 @@ EXIT_OK, EXIT_TOOL_ERROR, EXIT_CONNECTION = 0, 1, 2
 EPILOG = """\
 Runs network probes on the ethtester (a Raspberry Pi) over its MCP server. Every probe goes out
 through the tester's Ethernet port only, never Wi-Fi, so results describe the cable/port it is
-plugged into. Start with 'status'. The dongle is 100 Mbit only, so a 100M link is normal.
+plugged into. Start with 'status'. On a 10/100 dongle ('link' shows its modes) a 100M link is normal.
 
 Output is JSON on stdout (pretty-printed). Errors go to stderr.
 Exit codes: 0 OK, 1 tool error (the probe failed, e.g. no link), 2 connection/config error

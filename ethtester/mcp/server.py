@@ -24,8 +24,8 @@ log = logging.getLogger("ethtester.mcp")
 
 DEFAULT_TOKEN_PATH = Path("/etc/ethtester/mcp-token")
 INSTRUCTIONS = """Ethernet tester on a Raspberry Pi. Every probe runs through its Ethernet dongle only,
-never Wi-Fi, so results describe the cable/port it is plugged into. Start with get_status. The dongle is
-100 Mbit only, so 100M links are normal. dhcp_renew, link_control and neighbour_scan disturb the link
+never Wi-Fi, so results describe the cable/port it is plugged into. Start with get_status. Use
+get_link_details for the dongle's supported speeds: on a 10/100 dongle a 100M link is normal. dhcp_renew, link_control and neighbour_scan disturb the link
 briefly and can't run at the same time; forced speeds revert to autonegotiation automatically.
 dhcp_renew and link_control briefly show up on the tester's own screen and in get_history (e.g. NO DHCP,
 CABLE? (10M), extra flaps); treat those entries as caused by the test."""
