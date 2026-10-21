@@ -32,6 +32,7 @@ def load_font(candidates: list[tuple[str, int]], size: int):
 
 ROW_FONT = load_font(MONO, 11)
 HEAD_FONT = load_font(MONO_BOLD, 18)
+HEAD_SMALL_FONT = load_font(MONO_BOLD, 13)  # probe header when the 18 px one would cut the target
 
 
 @dataclass(frozen=True)
@@ -150,4 +151,53 @@ def render_message(title: str, subtitle: str) -> Image.Image:
     draw = ImageDraw.Draw(image)
     draw.text((4, 40), _fit(draw, title, HEAD_FONT, WIDTH - 8), font=HEAD_FONT, fill=0)
     draw.text((4, 70), _fit(draw, subtitle, ROW_FONT, WIDTH - 8), font=ROW_FONT, fill=0)
+    return image
+
+
+PROBE_HEAD_Y = 1
+PROBE_SMALL_HEAD_DY = 4
+PROBE_HEAD_DIVIDER_Y = 24
+PROBE_BODY_Y = 27
+PROBE_MAX_LINES = 4
+PROBE_FOOT_DIVIDER_Y = DIVIDER_Y
+PROBE_VERDICT_Y = 89
+PROBE_RIGHT_Y = 96
+PROBE_VERDICTS = {"running": "RUNNING…", "ok": "OK", "error": "FAILED"}
+
+
+def probe_lines(draw: ImageDraw.ImageDraw, activity: dict, clock_text: str) -> dict:
+    """The probe screen's texts, already fitted to their widths."""
+    target = activity.get("target") or ""
+    header = f"PROBE  {activity['tool']}" + (f" {target}" if target else "")
+    calls = activity.get("calls", 0)
+    right = f"{calls} call{'' if calls == 1 else 's'} {clock_text}"
+    verdict = PROBE_VERDICTS.get(activity["state"], activity["state"].upper())
+    right_width = draw.textlength(right, font=ROW_FONT)
+    header_font = HEAD_FONT
+    if draw.textlength(header, font=HEAD_FONT) > WIDTH - 4:
+        header_font = HEAD_SMALL_FONT
+    return {
+        "header": _fit(draw, header, header_font, WIDTH - 4),
+        "header_font": header_font,
+        "body": [_fit(draw, line, ROW_FONT, WIDTH - 4)
+                 for line in activity.get("summary", [])[:PROBE_MAX_LINES]],
+        "verdict": _fit(draw, verdict, HEAD_FONT, WIDTH - right_width - 12),
+        "right": right,
+    }
+
+
+def render_probe(activity: dict, clock_text: str) -> Image.Image:
+    image = Image.new("1", (WIDTH, HEIGHT), 255)
+    draw = ImageDraw.Draw(image)
+    lines = probe_lines(draw, activity, clock_text)
+    small = lines["header_font"] is not HEAD_FONT
+    draw.text((2, PROBE_HEAD_Y + (PROBE_SMALL_HEAD_DY if small else 0)), lines["header"],
+              font=lines["header_font"], fill=0)
+    draw.line([(0, PROBE_HEAD_DIVIDER_Y), (WIDTH, PROBE_HEAD_DIVIDER_Y)], fill=0)
+    for i, line in enumerate(lines["body"]):
+        draw.text((2, PROBE_BODY_Y + i * ROW_HEIGHT), line, font=ROW_FONT, fill=0)
+    draw.line([(0, PROBE_FOOT_DIVIDER_Y), (WIDTH, PROBE_FOOT_DIVIDER_Y)], fill=0)
+    draw.text((2, PROBE_VERDICT_Y), lines["verdict"], font=HEAD_FONT, fill=0)
+    right_width = draw.textlength(lines["right"], font=ROW_FONT)
+    draw.text((WIDTH - 2 - right_width, PROBE_RIGHT_Y), lines["right"], font=ROW_FONT, fill=0)
     return image
