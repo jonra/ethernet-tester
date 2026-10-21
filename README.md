@@ -49,3 +49,25 @@ The tester runs an MCP server, so Claude Code can read its status and run probes
 Tools: `get_status`, `get_history`, `get_link_details`, `ping`, `traceroute`, `dns_lookup`, `http_check`, `dhcp_renew`, `link_control`, `neighbour_scan`, `speed_test`.
 
 Every call is logged to `/var/log/ethtester/probes.log`. To rotate the token, delete `/etc/ethtester/mcp-token` and re-run the installer.
+
+## Command-line client (Mac)
+
+`scripts/ethtester` talks to the MCP server over plain HTTP, so Claude Code can call it through Bash. It needs only Python 3.11+ (no dependencies).
+
+```
+ln -s "$PWD/scripts/ethtester" ~/.local/bin/ethtester
+ethtester configure --url http://192.168.1.190:8765/mcp   # paste the token from the installer when asked
+```
+
+The settings are saved to `~/.config/ethtester/cli.toml` (mode 0600). `ETHTESTER_URL`, `ETHTESTER_TOKEN` and `ETHTESTER_CONFIG` override them, and so do `--url` and `--token`.
+
+```
+ethtester status
+ethtester ping 1.1.1.1 -c 10
+ethtester dns example.com -t AAAA --server 1.1.1.1
+ethtester link-control force-10 --duration 30
+ethtester speedtest 192.168.1.50 --reverse
+ethtester tools
+```
+
+Output is JSON. Exit codes: 0 OK, 1 tool error, 2 connection or config error. `ethtester --help` lists every command.
