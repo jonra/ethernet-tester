@@ -94,3 +94,92 @@ def test_recover_reconnects_disconnected_device():
     run2, ctl2 = make(FakeRun())
     ctl2.recover()
     assert ["nmcli", "--wait", "0", "device", "connect", "eth0"] not in run2.calls
+
+
+class Scripted(FakeRun):
+    """FakeRun whose ethtool settings write and nmcli calls can be made to fail."""
+
+    def __init__(self, fail_force=False, fail_restores=0, fail_nmcli=False, **kw):
+        super().__init__(**kw)
+        self.fail_force, self.fail_restores, self.fail_nmcli = fail_force, fail_restores, fail_nmcli
+
+    def __call__(self, cmd, **kwargs):
+        if cmd[:2] == ["ethtool", "-s"]:
+            if "off" in cmd:
+                self.calls.append(cmd)
+                if self.fail_force:
+                    raise RuntimeError("ethtool failed")
+                return ""
+            if self.fail_restores > 0:
+                self.fail_restores -= 1
+                self.calls.append(cmd)
+                raise RuntimeError("restore failed")
+        if cmd[0] == "nmcli" and self.fail_nmcli:
+            self.calls.append(cmd)
+            raise RuntimeError("nmcli failed")
+        return super().__call__(cmd, **kwargs)
+
+
+def test_force_ethtool_failure_attempts_restore():
+    run = Scripted(fail_force=True, ethtool=AUTONEG_OFF)
+    _, ctl = make(run)
+    with pytest.raises(RuntimeError, match="ethtool failed"):
+        ctl.force(100, 30)
+    assert ["ethtool", "-s", "eth0", "autoneg", "on"] in run.calls
+    with ctl.exclusive():
+        pass
+
+
+def test_timer_start_failure_releases_lock_and_restores():
+    class BadTimer(FakeTimer):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    run = FakeRun(ethtool=AUTONEG_OFF)
+    ctl = LinkControl("eth0", run=run, timer=BadTimer, clock=lambda: 100.0)
+    with pytest.raises(RuntimeError, match="thread"):
+        ctl.force(10, 60)
+    assert run.calls[-1] == ["ethtool", "-s", "eth0", "autoneg", "on"]
+    assert ctl.revert_in() is None
+    with ctl.exclusive():
+        pass
+
+
+def test_revert_retries_until_autoneg_restored():
+    run = Scripted(fail_restores=2, ethtool=AUTONEG_OFF)
+    sleeps = []
+    FakeTimer.created = []
+    ctl = LinkControl("eth0", run=run, timer=FakeTimer, clock=lambda: 100.0, sleep=sleeps.append)
+    ctl.force(10, 60)
+    FakeTimer.created[0].fn()
+    restores = [c for c in run.calls if c == ["ethtool", "-s", "eth0", "autoneg", "on"]]
+    assert len(restores) == 3
+    assert len(sleeps) == 2
+    assert ctl.revert_in() is None
+    with ctl.exclusive():
+        pass
+
+
+def test_revert_gives_up_after_three_attempts_and_still_unlocks():
+    run = Scripted(fail_restores=99, ethtool=AUTONEG_OFF)
+    FakeTimer.created = []
+    ctl = LinkControl("eth0", run=run, timer=FakeTimer, clock=lambda: 100.0, sleep=lambda s: None)
+    ctl.force(10, 60)
+    FakeTimer.created[0].fn()
+    assert len([c for c in run.calls if c == ["ethtool", "-s", "eth0", "autoneg", "on"]]) == 3
+    assert ctl.revert_in() is None
+    with ctl.exclusive():
+        pass
+
+
+def test_recover_reconnects_even_when_restore_raises():
+    run = Scripted(fail_restores=1, ethtool=AUTONEG_OFF, devices="eth0:disconnected\n")
+    _, ctl = make(run)
+    ctl.recover()
+    assert run.calls[-1] == ["nmcli", "--wait", "0", "device", "connect", "eth0"]
+
+
+def test_recover_never_raises():
+    run = Scripted(fail_restores=1, fail_nmcli=True, ethtool=AUTONEG_OFF)
+    _, ctl = make(run)
+    ctl.recover()

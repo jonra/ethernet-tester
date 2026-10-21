@@ -10,17 +10,22 @@ from .probes import parse_ethtool
 
 log = logging.getLogger(__name__)
 
+REVERT_ATTEMPTS = 3
+REVERT_RETRY_S = 2.0
+
 
 class Busy(Exception):
     pass
 
 
 class LinkControl:
-    def __init__(self, interface: str, run=run_command, timer=threading.Timer, clock=time.monotonic):
+    def __init__(self, interface: str, run=run_command, timer=threading.Timer, clock=time.monotonic,
+                 sleep=time.sleep):
         self.interface = interface
         self.run = run
         self.timer = timer
         self.clock = clock
+        self.sleep = sleep
         self.lock = threading.Lock()
         self._revert_at: float | None = None
 
@@ -54,19 +59,37 @@ class LinkControl:
         try:
             self.run(["ethtool", "-s", self.interface, "speed", str(speed), "duplex", "full", "autoneg", "off"])
         except Exception:
+            self._restore_quietly()
             self.lock.release()
             raise
         self._revert_at = self.clock() + duration_s
-        timer = self.timer(duration_s, self._revert)
-        timer.daemon = True
-        timer.start()
+        try:
+            timer = self.timer(duration_s, self._revert)
+            timer.daemon = True
+            timer.start()
+        except Exception:
+            self._restore_quietly()
+            self._revert_at = None
+            self.lock.release()
+            raise
         return {"action": f"force_{speed}", "reverts_in_s": duration_s}
 
-    def _revert(self) -> None:
+    def _restore_quietly(self) -> None:
         try:
             self.restore_autoneg()
         except Exception:
-            log.exception("autoneg revert failed")
+            log.exception("autoneg restore failed")
+
+    def _revert(self) -> None:
+        try:
+            for attempt in range(REVERT_ATTEMPTS):
+                try:
+                    self.restore_autoneg()
+                    return
+                except Exception:
+                    log.exception("autoneg revert failed (attempt %d/%d)", attempt + 1, REVERT_ATTEMPTS)
+                    if attempt < REVERT_ATTEMPTS - 1:
+                        self.sleep(REVERT_RETRY_S)
         finally:
             self._revert_at = None
             self.lock.release()
@@ -79,9 +102,15 @@ class LinkControl:
 
     def recover(self) -> None:
         """Undoes anything a crashed previous run may have left: forced speed, disconnected device."""
-        self.restore_autoneg()
-        states = self.run(["nmcli", "-t", "-f", "DEVICE,STATE", "device"], check=False)
-        for line in states.splitlines():
-            device, _, state = line.partition(":")
-            if device == self.interface and state == "disconnected":
-                self.run(["nmcli", "--wait", "0", "device", "connect", self.interface], check=False)
+        try:
+            self.restore_autoneg()
+        except Exception:
+            log.exception("recover: autoneg restore failed")
+        try:
+            states = self.run(["nmcli", "-t", "-f", "DEVICE,STATE", "device"], check=False)
+            for line in states.splitlines():
+                device, _, state = line.partition(":")
+                if device == self.interface and state == "disconnected":
+                    self.run(["nmcli", "--wait", "0", "device", "connect", self.interface], check=False)
+        except Exception:
+            log.exception("recover: reconnect failed")
