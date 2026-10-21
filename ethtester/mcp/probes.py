@@ -125,12 +125,13 @@ def dhcp_renew(interface: str, run=run_command, clock=time.monotonic, sleep=time
                timeout: float = 30.0) -> dict:
     """Drops the lease and reconnects; the main tester briefly shows the port without an address.
 
-    Once the disconnect has been issued the connect always runs, so the port is never left down."""
+    Once the disconnect has been attempted the connect always runs, even if the disconnect itself
+    failed or timed out, so the port is never left down."""
     show = ["nmcli", "-t", "-f", "IP4,DHCP4", "device", "show", interface]
     connect = ["nmcli", "--wait", "0", "device", "connect", interface]
-    run(["nmcli", "--wait", "10", "device", "disconnect", interface], timeout=15, check=False)
     dropped = False
     try:
+        run(["nmcli", "--wait", "10", "device", "disconnect", interface], timeout=15, check=False)
         for _ in range(10):
             if not parse_nmcli(run(show, check=False)).ip:
                 dropped = True

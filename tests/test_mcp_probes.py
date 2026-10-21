@@ -204,6 +204,20 @@ def test_dhcp_renew_drop_poll_raises_still_connects():
     assert calls[-1] == CONNECT
 
 
+def test_dhcp_renew_disconnect_timeout_still_connects():
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == DISCONNECT:
+            raise CheckError("nmcli timed out")
+        return ""
+
+    with pytest.raises(CheckError, match="timed out"):
+        probes.dhcp_renew("eth0", run=run, clock=stepping_clock(1.0), sleep=lambda s: None)
+    assert calls == [DISCONNECT, CONNECT]
+
+
 def test_neighbour_scan():
     run = Recorder(ARP)
     result = probes.neighbour_scan("eth0", run=run)
