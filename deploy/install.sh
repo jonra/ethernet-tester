@@ -17,6 +17,12 @@ if [ -f "$CONFIG" ]; then
   MCP_PORT="${MCP_PORT%%$'\n'*}"
 fi
 MCP_PORT="${MCP_PORT:-8765}"
+MCP_BIND=""
+if [ -f "$CONFIG" ]; then
+  MCP_BIND="$(sed -n 's/^mcp_bind *= *"\(.*\)".*/\1/p' "$CONFIG")"
+  MCP_BIND="${MCP_BIND%%$'\n'*}"
+fi
+MCP_BIND="${MCP_BIND:-tailscale}"
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -76,10 +82,25 @@ systemctl try-restart ethtester
 systemctl restart ethtester-mcp || echo "warning: ethtester-mcp did not start yet (is Tailscale up?)"
 
 echo "Installed. On a first install, reboot to enable SPI; on a re-run the service has been restarted."
-TS_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
-if [ -z "$TS_IP" ]; then
-  echo "Next: run 'sudo tailscale up' on the Pi, open the link it prints, then re-run this installer."
+TOKEN="$(cat /etc/ethtester/mcp-token)"
+if [ "$MCP_BIND" = "tailscale" ]; then
+  TS_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+  if [ -z "$TS_IP" ]; then
+    echo "Next: run 'sudo tailscale up' on the Pi, open the link it prints, then re-run this installer."
+  else
+    echo "Add the tester to Claude Code on your Mac with:"
+    echo "  claude mcp add --transport http ethtester http://$TS_IP:$MCP_PORT/mcp --header \"Authorization: Bearer $TOKEN\""
+  fi
 else
-  echo "Add the tester to Claude Code on your Mac with:"
-  echo "  claude mcp add --transport http ethtester http://$TS_IP:$MCP_PORT/mcp --header \"Authorization: Bearer $(cat /etc/ethtester/mcp-token)\""
+  if [[ "$MCP_BIND" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    MCP_ADDR="$MCP_BIND"
+  else
+    MCP_ADDR="$(ip -4 -o addr show dev "$MCP_BIND" 2>/dev/null | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p' | head -n1 || true)"
+  fi
+  if [ -z "$MCP_ADDR" ]; then
+    echo "Next: $MCP_BIND has no IPv4 address yet; connect the Pi to Wi-Fi and re-run this installer."
+  else
+    echo "Add the tester to Claude Code on your Mac with:"
+    echo "  claude mcp add --transport http ethtester http://$MCP_ADDR:$MCP_PORT/mcp --header \"Authorization: Bearer $TOKEN\""
+  fi
 fi
