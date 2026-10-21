@@ -261,3 +261,29 @@ def test_bearer_auth_rejects_unknown_clients_mode():
 def test_build_app_passes_clients_through():
     app = build_app(FakeService(), TOKEN, clients="lan")
     assert app.clients == "lan"
+
+
+def test_main_passes_activity_path_to_service(tmp_path, monkeypatch):
+    from ethtester.mcp import server
+
+    cfg_path = tmp_path / "c.toml"
+    cfg_path.write_text(f'activity_path = "{tmp_path / "a.json"}"\nlog_path = "{tmp_path / "e.log"}"\n')
+    built = []
+
+    class FakeLinkControl:
+        def __init__(self, iface):
+            pass
+
+        def recover(self):
+            pass
+
+        def _restore_quietly(self):
+            pass
+
+    monkeypatch.setattr(server, "read_token", lambda path: TOKEN)
+    monkeypatch.setattr(server, "LinkControl", FakeLinkControl)
+    monkeypatch.setattr(server, "resolve_bind", lambda cfg: "127.0.0.1")
+    monkeypatch.setattr(server, "build_app", lambda service, token, clients: built.append(service))
+    monkeypatch.setattr(server.uvicorn, "run", lambda app, **kw: None)
+    server.main(["--config", str(cfg_path), "--token-file", str(tmp_path / "t")])
+    assert built[0].activity_path == tmp_path / "a.json"

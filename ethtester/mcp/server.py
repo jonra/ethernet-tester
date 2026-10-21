@@ -157,7 +157,8 @@ def main(argv: list[str] | None = None) -> None:
     linkctl.recover()  # restore a forced link first, even if Tailscale isn't up yet
     bind = resolve_bind(cfg)
     probelog = ProbeLog(Path(cfg.log_path).with_name("probes.log"))
-    app = build_app(ProbeService(cfg, linkctl, probelog=probelog), token, cfg.mcp_clients)
+    service = ProbeService(cfg, linkctl, probelog=probelog, activity_path=Path(cfg.activity_path))
+    app = build_app(service, token, cfg.mcp_clients)
     log.info("MCP server listening on http://%s:%d/mcp", bind, cfg.mcp_port)
     try:
         uvicorn.run(app, host=bind, port=cfg.mcp_port, log_level="info")

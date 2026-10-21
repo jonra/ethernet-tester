@@ -39,7 +39,7 @@ class NoTimer:
         pass
 
 
-def make(tmp_path: Path, up=True, lease=LEASE):
+def make(tmp_path: Path, up=True, lease=LEASE, activity_path=None, wall=lambda: 1_000.0):
     cfg = Config(state_path=str(tmp_path / "state.json"), log_path=str(tmp_path / "ethtester.log"))
     run = FakeRun()
     linkctl = LinkControl("eth0", run=run, timer=NoTimer, clock=lambda: 0.0)
@@ -52,7 +52,8 @@ def make(tmp_path: Path, up=True, lease=LEASE):
 
     service = ProbeService(cfg, linkctl, probelog=probelog, run=run,
                            link=lambda i: LinkResult(up=up, speed_mbps=100 if up else None, carrier_changes=2),
-                           dhcp=lambda i: lease, dns=dns, sleep=lambda s: None, wall=lambda: 1_000.0)
+                           dhcp=lambda i: lease, dns=dns, sleep=lambda s: None, wall=wall,
+                           activity_path=activity_path)
     return service, run, dns_calls, tmp_path / "probes.log"
 
 
@@ -203,3 +204,139 @@ def test_get_history_skips_odd_lines(tmp_path):
     (tmp_path / "ethtester.log").write_text("\n".join(lines) + "\n")
     assert [e["ts"] for e in service.get_history()["entries"]] == ["2026-10-21T09:40:00"]
     assert len(service.get_history(since="2026-10-21T09:00:00")["entries"]) == 1
+
+
+from ethtester.activity import read_activity  # noqa: E402
+from ethtester.mcp import service as service_mod  # noqa: E402
+
+
+class Ticker:
+    def __init__(self, start=1_000.0, step=1.0):
+        self.now, self.step = start, step
+
+    def __call__(self):
+        self.now += self.step
+        return self.now
+
+
+def test_activity_running_then_finished(tmp_path):
+    path = tmp_path / "run" / "activity.json"
+    service, run, *_ = make(tmp_path, activity_path=path, wall=Ticker())
+    seen = []
+    inner = service.run
+
+    def spy(cmd, **kwargs):
+        if cmd[0] == "ping":
+            seen.append(read_activity(path))
+        return inner(cmd, **kwargs)
+
+    service.run = spy
+    service.ping("1.1.1.1", count=5)
+    running = seen[0]
+    assert running["tool"] == "ping" and running["target"] == "1.1.1.1"
+    assert running["state"] == "running" and running["finished"] is None
+    assert running["summary"] == [] and running["calls"] == 1
+    done = read_activity(path)
+    assert done["id"] == running["id"] and done["state"] == "ok"
+    assert done["started"] == running["started"] and done["finished"] > done["started"]
+    assert done["settle_until"] == done["finished"]
+    assert done["summary"] == ["sent 5  received 5  loss 0%", "rtt 1.0 / 1.5 / 2.0 ms"]
+
+
+def test_activity_not_written_for_read_only_tools(tmp_path):
+    path = tmp_path / "activity.json"
+    service, *_ = make(tmp_path, activity_path=path)
+    s = ok_snapshot()
+    write_state(tmp_path / "state.json", s, evaluate(s, 1000, 20), 990.0)
+    service.get_status()
+    service.get_history()
+    service.get_link_details()
+    assert not path.exists()
+    service.ping("1.1.1.1")
+    assert read_activity(path)["calls"] == 1
+
+
+def test_activity_error_and_new_ids_and_call_count(tmp_path):
+    path = tmp_path / "activity.json"
+    service, *_ = make(tmp_path, up=False, activity_path=path, wall=Ticker())
+    with pytest.raises(ProbeError):
+        service.ping("1.1.1.1")
+    first = read_activity(path)
+    assert first["state"] == "error" and first["summary"] == ["eth0 has no link; plug in a cable", "first"]
+    with pytest.raises(ValueError):
+        service.traceroute("1.1.1.1", max_hops=99)
+    second = read_activity(path)
+    assert second["id"] != first["id"] and second["calls"] == 2 and second["tool"] == "traceroute"
+    assert second["state"] == "error"
+
+
+def test_activity_failed_result_is_error(tmp_path, monkeypatch):
+    path = tmp_path / "activity.json"
+    service, *_ = make(tmp_path, activity_path=path)
+    monkeypatch.setattr(service_mod.probes, "speed_test",
+                        lambda *a, **k: {"server": "mac.lan", "reverse": False, "ok": False, "error": "refused"})
+    service.speed_test("mac.lan")
+    done = read_activity(path)
+    assert done["state"] == "error" and done["summary"] == ["refused"]
+
+
+def test_activity_settle_until(tmp_path, monkeypatch):
+    path = tmp_path / "activity.json"
+    service, *_ = make(tmp_path, activity_path=path)   # wall is always 1000
+    monkeypatch.setattr(service_mod.probes, "dhcp_renew",
+                        lambda iface, run, sleep: {"ok": True, "seconds_to_ip": 2.0, "ip": "10.0.0.2",
+                                                   "prefix": 24, "gateway": "10.0.0.1", "dhcp_server": "10.0.0.1"})
+    service.dhcp_renew()
+    assert read_activity(path)["settle_until"] == 1_010.0
+    service.link_control("renegotiate")
+    assert read_activity(path)["settle_until"] == 1_010.0
+    service.link_control("force_100", duration_s=30)
+    done = read_activity(path)
+    assert done["settle_until"] == 1_040.0 and done["summary"][:2] == ["force_100", "reverts in 30s"]
+    service.ping("1.1.1.1")
+    assert read_activity(path)["settle_until"] == 1_000.0
+
+
+def test_activity_older_probe_does_not_overwrite_newer(tmp_path):
+    path = tmp_path / "activity.json"
+    service, *_ = make(tmp_path, activity_path=path, wall=Ticker())
+    inner = service.run
+
+    def run(cmd, **kwargs):
+        if cmd[0] == "ping":
+            service.traceroute("8.8.8.8")   # a second client starts a probe meanwhile
+        return inner(cmd, **kwargs)
+
+    service.run = run
+    service.ping("1.1.1.1")
+    shown = read_activity(path)
+    assert shown["tool"] == "traceroute" and shown["state"] == "ok" and shown["calls"] == 2
+
+
+def test_activity_write_failure_never_breaks_tools(tmp_path, caplog):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    service, *_ = make(tmp_path, activity_path=blocker / "activity.json")
+    assert service.ping("1.1.1.1")["received"] == 5
+    with pytest.raises(ValueError, match="count"):
+        service.ping("1.1.1.1", count=99)
+    assert "activity write failed" in caplog.text
+
+
+def test_activity_summary_failure_still_finishes(tmp_path, monkeypatch):
+    path = tmp_path / "activity.json"
+    service, *_ = make(tmp_path, activity_path=path)
+
+    def broken(*a):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(service_mod.summary, "summarise", broken)
+    assert service.ping("1.1.1.1")["received"] == 5
+    done = read_activity(path)
+    assert done["state"] == "ok" and done["summary"] == []
+
+
+def test_no_activity_path_writes_nothing(tmp_path):
+    service, *_ = make(tmp_path)
+    service.ping("1.1.1.1")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["probes.log"]
