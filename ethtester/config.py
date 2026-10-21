@@ -25,6 +25,8 @@ class Config:
     png_path: str = "/tmp/ethtester.png"
     log_path: str = "/var/log/ethtester/ethtester.log"
     state_path: str = "/run/ethtester/state.json"
+    # written by the MCP server while it probes, read by the display loop for the probe screen
+    activity_path: str = "/run/ethtester/activity.json"
     mcp_port: int = 8765
     # "tailscale" (default), an interface name such as "wlan0", or an explicit IPv4 address
     mcp_bind: str = "tailscale"

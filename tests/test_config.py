@@ -94,3 +94,10 @@ def test_invalid_mcp_clients_rejected(tmp_path: Path):
     path.write_text('mcp_clients = "world"\n')
     with pytest.raises(ValueError, match="mcp_clients"):
         load_config(path)
+
+
+def test_activity_path_default(tmp_path: Path):
+    assert Config().activity_path == "/run/ethtester/activity.json"
+    path = tmp_path / "c.toml"
+    path.write_text(f'activity_path = "{tmp_path / "a.json"}"\n')
+    assert load_config(path).activity_path == str(tmp_path / "a.json")
