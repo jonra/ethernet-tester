@@ -57,7 +57,7 @@ find /opt/ethtester -name __pycache__ -prune -exec rm -rf {} +
 if [ ! -x /opt/ethtester/venv/bin/python ]; then
   python3 -m venv --system-site-packages /opt/ethtester/venv
 fi
-/opt/ethtester/venv/bin/pip install --quiet "mcp>=1.13,<2" "uvicorn>=0.30"
+/opt/ethtester/venv/bin/pip install --quiet "mcp==1.30.0" "uvicorn>=0.30"
 
 install -d -m 700 /etc/ethtester
 if [ ! -s /etc/ethtester/mcp-token ]; then
